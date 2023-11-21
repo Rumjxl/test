@@ -40,13 +40,16 @@ class SetTimestamp : public Element { public:
     const char *port_count() const		{ return PORTS_1_1; }
     int configure(Vector<String> &, ErrorHandler *) CLICK_COLD;
 
-    Packet *simple_action(Packet *);
+    inline Packet *smaction(Packet *);
+    void push(int, Packet *);
+    Packet *pull(int);
 
   private:
 
     enum { ACT_NOW, ACT_TIME, ACT_FIRST_NOW, ACT_FIRST_TIME }; // order matters
     int _action;
     Timestamp _tv;
+    bool _steady;
 
 };
 

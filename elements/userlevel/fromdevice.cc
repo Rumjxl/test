@@ -51,7 +51,6 @@
 # include <features.h>
 # include <linux/if_packet.h>
 # include <net/ethernet.h>
-# include <linux/sockios.h>
 #endif
 
 CLICK_DECLS

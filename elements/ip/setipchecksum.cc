@@ -19,12 +19,24 @@
 #include <click/config.h>
 #include "setipchecksum.hh"
 #include <click/glue.hh>
+#include <click/args.hh>
 #include <clicknet/ip.h>
 CLICK_DECLS
 
 SetIPChecksum::SetIPChecksum()
-    : _drops(0)
+    : _drops(0), _sharedpkt(false)
 {
+}
+
+int
+SetIPChecksum::configure(Vector<String> &conf, ErrorHandler *errh)
+{
+    if (Args(this, errh).bind(conf)
+        .read("SHAREDPKT", _sharedpkt) 
+        .consume() < 0)
+        return -1;
+
+    return 0;
 }
 
 SetIPChecksum::~SetIPChecksum()
@@ -32,9 +44,15 @@ SetIPChecksum::~SetIPChecksum()
 }
 
 Packet *
-SetIPChecksum::simple_action(Packet *p_in)
+SetIPChecksum::smaction(Packet *p_in)
 {
-    if (WritablePacket *p = p_in->uniqueify()) {
+    WritablePacket *p;
+    if (_sharedpkt)
+	p = (WritablePacket *) p_in;
+    else 
+	p = p_in->uniqueify();
+    
+    if (p) {
 	unsigned char *nh_data = (p->has_network_header() ? p->network_header() : p->data());
 	click_ip *iph = reinterpret_cast<click_ip *>(nh_data);
 	unsigned plen = p->end_data() - nh_data, hlen;
@@ -52,6 +70,70 @@ SetIPChecksum::simple_action(Packet *p_in)
 	p->kill();
     }
     return 0;
+}
+
+void
+SetIPChecksum::push(int, Packet *p)
+{
+    Packet* head = NULL;
+#if HAVE_BATCH
+    Packet* curr = p;
+    Packet* prev = p;
+    Packet* next = NULL;
+    while (curr){
+	next = curr->next();
+	curr->set_next(NULL);
+	
+	Packet* r = smaction(curr);
+	if (r){    
+	    if (head == NULL)
+		head = r;
+	    else
+		prev->set_next(r);
+	    prev = r;
+	}
+
+	curr = next;
+    }
+#else
+    head = smaction(p);
+#endif //HAVE_BATCH
+    if (head)
+	output(0).push(head);
+}
+
+Packet *
+SetIPChecksum::pull(int)
+{
+    //TODO Test
+    Packet* p = input(0).pull();
+    Packet* head = NULL;
+#if HAVE_BATCH
+    Packet* curr = p;
+    Packet* prev = p;
+    Packet* next = NULL;
+    while (curr){
+	next = curr->next();
+	curr->set_next(NULL);
+	
+	Packet* r = smaction(curr);
+	if (r){    
+	    if (head == NULL)
+		head = r;
+	    else
+		prev->set_next(r);
+	    prev = r;
+	}
+
+	curr = next;
+    }
+#else
+    head = smaction(p);
+#endif //HAVE_BATCH
+    if (head)
+      return head;
+    else
+      return NULL;
 }
 
 void

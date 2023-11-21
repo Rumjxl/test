@@ -60,6 +60,7 @@ IPPrint::configure(Vector<String> &conf, ErrorHandler *errh)
   _active = true;
   bool print_id = false;
   bool print_time = true;
+  bool print_core = false;
   bool print_paint = false;
   bool print_tos = false;
   bool print_ttl = false;
@@ -76,6 +77,7 @@ IPPrint::configure(Vector<String> &conf, ErrorHandler *errh)
 	.read("NBYTES", _bytes) // deprecated
 	.read("ID", print_id)
 	.read("TIMESTAMP", print_time)
+	.read("COREID", print_core)
 	.read("PAINT", print_paint)
 	.read("TOS", print_tos)
 	.read("TTL", print_ttl)
@@ -119,6 +121,7 @@ IPPrint::configure(Vector<String> &conf, ErrorHandler *errh)
 
   _print_id = print_id;
   _print_timestamp = print_time;
+  _print_core = print_core ;
   _print_paint = print_paint;
   _print_tos = print_tos;
   _print_ttl = print_ttl;
@@ -330,117 +333,134 @@ IPPrint::icmp_line(StringAccum &sa, const Packet *p, int transport_length) const
 Packet *
 IPPrint::simple_action(Packet *p)
 {
-    if (!_active || !p->has_network_header())
-	return p;
+    Packet* head = p;
+    Packet* curr = p;
+#if HAVE_BATCH
+    while (curr){
+#endif
+	if (!_active || !curr->has_network_header())
+#if HAVE_BATCH
+	{
+	    curr = curr->next();
+	    continue;
+	}
+#else	    
+	    return curr;
+#endif
 
-    StringAccum sa;
+	StringAccum sa;
 
-    if (_label)
-	sa << _label << ": ";
-    if (_print_timestamp)
-	sa << p->timestamp_anno() << ": ";
-    if (_print_aggregate)
-	sa << '#' << AGGREGATE_ANNO(p);
-    if (_print_paint)
-	sa << (_print_aggregate ? "." : "paint ") << (int)PAINT_ANNO(p);
-    if (_print_aggregate || _print_paint)
-	sa << ": ";
+	if (_label)
+	    sa << _label << ": ";
+	if (_print_timestamp)
+	    sa << curr->timestamp_anno() << ": ";
+	if (_print_core )
+	    sa << "coreid " << click_current_cpu_id() << ": ";
+	if (_print_aggregate)
+	    sa << '#' << AGGREGATE_ANNO(curr);
+	if (_print_paint)
+	    sa << (_print_aggregate ? "." : "paint ") << (int)PAINT_ANNO(curr);
+	if (_print_aggregate || _print_paint)
+	    sa << ": ";
 
-    if (p->network_length() < (int) sizeof(click_ip))
-	sa << "truncated-ip";
-    else {
-	const click_ip *iph = p->ip_header();
-	int ip_len = ntohs(iph->ip_len);
-	int payload_len = ip_len - (iph->ip_hl << 2);
-	int transport_length = p->transport_length();
-	if (transport_length > payload_len)
-	    transport_length = payload_len;
+	if (curr->network_length() < (int) sizeof(click_ip))
+	    sa << "truncated-ip";
+	else {
+	    const click_ip *iph = curr->ip_header();
+	    int ip_len = ntohs(iph->ip_len);
+	    int payload_len = ip_len - (iph->ip_hl << 2);
+	    int transport_length = curr->transport_length();
+	    if (transport_length > payload_len)
+		transport_length = payload_len;
 
-	if (_print_id)
-	    sa << "id " << ntohs(iph->ip_id) << ' ';
-	if (_print_ttl)
-	    sa << "ttl " << (int)iph->ip_ttl << ' ';
-	if (_print_tos)
-	    sa << "tos " << (int)iph->ip_tos << ' ';
-	if (_print_len)
-	    sa << "length " << ip_len << ' ';
+	    if (_print_id)
+		sa << "id " << ntohs(iph->ip_id) << ' ';
+	    if (_print_ttl)
+		sa << "ttl " << (int)iph->ip_ttl << ' ';
+	    if (_print_tos)
+		sa << "tos " << (int)iph->ip_tos << ' ';
+	    if (_print_len)
+		sa << "length " << ip_len << ' ';
 
-	if (iph->ip_p == IP_PROTO_TCP)
-	    tcp_line(sa, p, transport_length);
-	else if (iph->ip_p == IP_PROTO_UDP)
-	    udp_line(sa, p, transport_length);
-	else if (iph->ip_p == IP_PROTO_ICMP)
-	    icmp_line(sa, p, transport_length);
-	else
-	    sa << IPAddress(iph->ip_src) << " > " << IPAddress(iph->ip_dst) << ": ip-proto-" << (int)iph->ip_p;
+	    if (iph->ip_p == IP_PROTO_TCP)
+		tcp_line(sa, curr, transport_length);
+	    else if (iph->ip_p == IP_PROTO_UDP)
+		udp_line(sa, curr, transport_length);
+	    else if (iph->ip_p == IP_PROTO_ICMP)
+		icmp_line(sa, curr, transport_length);
+	    else
+		sa << IPAddress(iph->ip_src) << " > " << IPAddress(iph->ip_dst) << ": ip-proto-" << (int)iph->ip_p;
 
-	// print fragment info
-	if (IP_ISFRAG(iph))
-	    sa << " (frag " << ntohs(iph->ip_id) << ':' << payload_len << '@'
-	       << ((ntohs(iph->ip_off) & IP_OFFMASK) << 3)
-	       << ((iph->ip_off & htons(IP_MF)) ? "+" : "") << ')';
+	    // print fragment info
+	    if (IP_ISFRAG(iph))
+		sa << " (frag " << ntohs(iph->ip_id) << ':' << payload_len << '@'
+		  << ((ntohs(iph->ip_off) & IP_OFFMASK) << 3)
+		  << ((iph->ip_off & htons(IP_MF)) ? "+" : "") << ')';
 
-	// print payload
-	if (_contents > 0) {
-	    const uint8_t *data;
-	    if (_payload) {
-		if (IP_FIRSTFRAG(iph) && iph->ip_p == IP_PROTO_TCP)
-		    data = p->transport_header() + (p->tcp_header()->th_off << 2);
-		else if (IP_FIRSTFRAG(iph) && iph->ip_p == IP_PROTO_UDP)
-		    data = p->transport_header() + sizeof(click_udp);
-		else
-		    data = p->transport_header();
-	    } else
-		data = p->data();
-
-	    int bytes = _bytes;
-	    if (data >= p->end_data())
-		bytes = 0;
-	    else if (bytes < 0 || (int) (p->end_data() - data) < bytes)
-		bytes = p->end_data() - data;
-	    int amt = 3*bytes + (bytes/4+1) + 3*(bytes/24+1) + 1;
-
-	    char *buf = sa.reserve(amt);
-	    char *orig_buf = buf;
-
-	    if (buf && _contents == 1) {
-		for (int i = 0; i < bytes; i++, data++) {
-		    if ((i % 24) == 0) {
-			*buf++ = '\n'; *buf++ = ' '; *buf++ = ' ';
-		    } else if ((i % 4) == 0)
-			*buf++ = ' ';
-		    sprintf(buf, "%02x", *data & 0xff);
-		    buf += 2;
-		}
-	    } else if (buf && _contents == 2) {
-		for (int i = 0; i < bytes; i++, data++) {
-		    if ((i % 48) == 0) {
-			*buf++ = '\n'; *buf++ = ' '; *buf++ = ' ';
-		    } else if ((i % 8) == 0)
-			*buf++ = ' ';
-		    if (*data < 32 || *data > 126)
-			*buf++ = '.';
+	    // print payload
+	    if (_contents > 0) {
+		const uint8_t *data;
+		if (_payload) {
+		    if (IP_FIRSTFRAG(iph) && iph->ip_p == IP_PROTO_TCP)
+			data = curr->transport_header() + (curr->tcp_header()->th_off << 2);
+		    else if (IP_FIRSTFRAG(iph) && iph->ip_p == IP_PROTO_UDP)
+			data = curr->transport_header() + sizeof(click_udp);
 		    else
-			*buf++ = *data;
-		}
-	    }
+			data = curr->transport_header();
+		} else
+		    data = curr->data();
 
-	    if (orig_buf) {
-		assert(buf <= orig_buf + amt);
-		sa.adjust_length(buf - orig_buf);
+		int bytes = _bytes;
+		if (data >= curr->end_data())
+		    bytes = 0;
+		else if (bytes < 0 || (int) (curr->end_data() - data) < bytes)
+		    bytes = curr->end_data() - data;
+		int amt = 3*bytes + (bytes/4+1) + 3*(bytes/24+1) + 1;
+
+		char *buf = sa.reserve(amt);
+		char *orig_buf = buf;
+
+		if (buf && _contents == 1) {
+		    for (int i = 0; i < bytes; i++, data++) {
+			if ((i % 24) == 0) {
+			    *buf++ = '\n'; *buf++ = ' '; *buf++ = ' ';
+			} else if ((i % 4) == 0)
+			    *buf++ = ' ';
+			sprintf(buf, "%02x", *data & 0xff);
+			buf += 2;
+		    }
+		} else if (buf && _contents == 2) {
+		    for (int i = 0; i < bytes; i++, data++) {
+			if ((i % 48) == 0) {
+			    *buf++ = '\n'; *buf++ = ' '; *buf++ = ' ';
+			} else if ((i % 8) == 0)
+			    *buf++ = ' ';
+			if (*data < 32 || *data > 126)
+			    *buf++ = '.';
+			else
+			    *buf++ = *data;
+		    }
+		}
+
+		if (orig_buf) {
+		    assert(buf <= orig_buf + amt);
+		    sa.adjust_length(buf - orig_buf);
+		}
 	    }
 	}
-    }
 
 #if CLICK_USERLEVEL
-    if (_outfile) {
-	sa << '\n';
-	ignore_result(fwrite(sa.data(), 1, sa.length(), _outfile));
-    } else
+	if (_outfile) {
+	    sa << '\n';
+	    ignore_result(fwrite(sa.data(), 1, sa.length(), _outfile));
+	} else
 #endif
-	_errh->message("%s", sa.c_str());
-
-    return p;
+	    _errh->message("%s", sa.c_str());
+#if HAVE_BATCH
+	curr = curr->next();
+    }
+#endif
+    return head;
 }
 
 void

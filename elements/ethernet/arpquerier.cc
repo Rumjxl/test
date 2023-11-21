@@ -59,6 +59,7 @@ ARPQuerier::configure(Vector<String> &conf, ErrorHandler *errh)
     bool have_capacity, have_entry_capacity, have_entry_packet_capacity, have_capacity_slim_factor, have_timeout, have_broadcast,
 	broadcast_poll = false;
     _arpt = 0;
+    _sharedpkt = false;
     if (Args(this, errh).bind(conf)
 	.read("CAPACITY", capacity).read_status(have_capacity)
 	.read("ENTRY_CAPACITY", entry_capacity).read_status(have_entry_capacity)
@@ -69,6 +70,7 @@ ARPQuerier::configure(Vector<String> &conf, ErrorHandler *errh)
 	.read("TABLE", ElementCastArg("ARPTable"), _arpt)
 	.read("POLL_TIMEOUT", poll_timeout)
 	.read("BROADCAST_POLL", broadcast_poll)
+	.read("SHAREDPKT", _sharedpkt) // operate on shared packet
 	.consume() < 0)
 	return -1;
 
@@ -123,6 +125,7 @@ ARPQuerier::live_reconfigure(Vector<String> &conf, ErrorHandler *errh)
 	broadcast_poll(_broadcast_poll);
     IPAddress my_bcast_ip;
 
+    _sharedpkt = false;
     if (Args(this, errh).bind(conf)
 	.read("CAPACITY", capacity).read_status(have_capacity)
 	.read("ENTRY_CAPACITY", entry_capacity).read_status(have_entry_capacity)
@@ -133,6 +136,7 @@ ARPQuerier::live_reconfigure(Vector<String> &conf, ErrorHandler *errh)
 	.read_with("TABLE", AnyArg())
 	.read("POLL_TIMEOUT", poll_timeout)
 	.read("BROADCAST_POLL", broadcast_poll)
+	.read("SHAREDPKT", _sharedpkt)
 	.consume() < 0)
 	return -1;
 
@@ -260,26 +264,44 @@ ARPQuerier::send_query_for(const Packet *p, bool ether_dhost_valid)
  * May save the packet in the ARP table for later sending.
  * May call p->kill().
  */
-void
+Packet*
 ARPQuerier::handle_ip(Packet *p, bool response)
 {
     // delete packet if we are not configured
     if (!_my_ip) {
 	p->kill();
 	++_drops;
-	return;
+	return NULL;
     }
 
-    // make room for Ethernet header
+    // make room for Ethernet header. 
     WritablePacket *q;
     if (response) {
-	assert(!p->shared());
-	q = p->uniqueify();
-    } else if (!(q = p->push_mac_header(sizeof(click_ether)))) {
-	++_drops;
-	return;
-    } else
-	q->ether_header()->ether_type = htons(ETHERTYPE_IP);
+	if (_sharedpkt) 
+	    q = (WritablePacket *) p;
+	else {
+	    assert(!p->shared());
+	    q = p->uniqueify();
+	}
+    }
+    else{ 
+	if (_sharedpkt)
+	     q = (WritablePacket *) p->nonunique_push(sizeof(click_ether));
+	else
+	     q = p->push_mac_header(sizeof(click_ether));
+      
+	if (q == NULL){
+	    p->kill();
+	    ++_drops;
+	    return NULL;
+	}
+	else {
+	    if (_sharedpkt)
+		q->set_mac_header(q->data());
+
+	    q->ether_header()->ether_type = htons(ETHERTYPE_IP);
+	}
+    }
 
     IPAddress dst_ip = q->dst_ip_anno();
     EtherAddress *dst_eth = reinterpret_cast<EtherAddress *>(q->ether_header()->ether_dhost);
@@ -325,14 +347,14 @@ ARPQuerier::handle_ip(Packet *p, bool response)
 		send_query_for(q, false); // q is on the ARP entry's queue
 	    // if r >= 0, do not q->kill() since it is stored in some ARP entry.
 	}
-	return;
+	return NULL;
     }
 
     // It's time to emit the packet with our Ethernet address as source.  (Set
     // the source address immediately before send in case the user changes the
     // source address while packets are enqueued.)
     memcpy(&q->ether_header()->ether_shost, _my_en.data(), 6);
-    output(0).push(q);
+    return q;
 }
 
 /*
@@ -363,7 +385,11 @@ ARPQuerier::handle_response(Packet *p)
 	// Send out packets in the order in which they arrived
 	while (cached_packet) {
 	    Packet *next = cached_packet->next();
-	    handle_ip(cached_packet, true);
+	    Packet *r = handle_ip(cached_packet, true);
+	    assert(r);
+	    r->set_next(NULL);
+	    output(0).push(r); //Send out packets one by one. 
+	    //TODO can send a batch but, I think it is not needed for the moment
 	    cached_packet = next;
 	}
     }
@@ -372,12 +398,40 @@ ARPQuerier::handle_response(Packet *p)
 void
 ARPQuerier::push(int port, Packet *p)
 {
-    if (port == 0)
-	handle_ip(p, false);
-    else {
-	handle_response(p);
-	p->kill();
+    Packet* head = NULL;
+    Packet* curr = p;
+    Packet* prev = p;
+    Packet* next = NULL;
+#if HAVE_BATCH
+    while (curr){
+	next = curr->next();
+	curr->set_next(NULL);
+#endif
+	Packet * r = NULL;
+	if (port == 0){
+	    r = handle_ip(curr, false);
+	  
+	}
+	else {
+	    handle_response(curr);
+	    curr->kill();
+	}
+	if (r){
+	    if (head == NULL)
+		head = r;
+            else
+		prev->set_next(r);
+            prev = r;
+	}
+	curr = next;
+#if HAVE_BATCH
+	
     }
+#endif //HAVE_BATCH
+    if (head)
+	output(0).push(head);
+  
+
 }
 
 String

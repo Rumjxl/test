@@ -406,7 +406,7 @@ SpinlockIRQ::release(flags_t flags)
 class ReadWriteLock { public:
 
     inline ReadWriteLock();
-#if CLICK_LINUXMODULE && defined(CONFIG_SMP)
+#if ((CLICK_LINUXMODULE && defined(CONFIG_SMP)) || (CLICK_USERLEVEL && HAVE_MULTITHREAD))
     inline ~ReadWriteLock();
 #endif
 
@@ -424,6 +424,11 @@ class ReadWriteLock { public:
 	Spinlock _lock;
 	unsigned char reserved[L1_CACHE_BYTES - sizeof(Spinlock)];
     } *_l;
+#elif CLICK_USERLEVEL && HAVE_MULTITHREAD
+     // allocate a cache line for every member
+    struct lock_t {
+	Spinlock _lock;
+    } *_l CLICK_ALIGNED(CLICK_CACHE_LINE_SIZE);
 #endif
 
 };
@@ -432,12 +437,14 @@ class ReadWriteLock { public:
 inline
 ReadWriteLock::ReadWriteLock()
 {
-#if CLICK_LINUXMODULE && defined(CONFIG_SMP)
+#if (CLICK_LINUXMODULE && defined(CONFIG_SMP))
     _l = new lock_t[num_possible_cpus()];
+#elif (CLICK_USERLEVEL && HAVE_MULTITHREAD)
+    _l = new lock_t[click_max_cpu_ids()];
 #endif
 }
 
-#if CLICK_LINUXMODULE && defined(CONFIG_SMP)
+#if ((CLICK_LINUXMODULE && defined(CONFIG_SMP)) || (CLICK_USERLEVEL && HAVE_MULTITHREAD))
 inline
 ReadWriteLock::~ReadWriteLock()
 {
@@ -457,8 +464,12 @@ ReadWriteLock::~ReadWriteLock()
 inline void
 ReadWriteLock::acquire_read()
 {
-#if CLICK_LINUXMODULE && defined(CONFIG_SMP)
+#if ((CLICK_LINUXMODULE && defined(CONFIG_SMP)) || (CLICK_USERLEVEL && HAVE_MULTITHREAD))
+# if CLICK_LINUXMODULE && defined(CONFIG_SMP)
     click_processor_t my_cpu = click_get_processor();
+# else
+    click_processor_t my_cpu = click_current_cpu_id();
+# endif
     _l[my_cpu]._lock.acquire();
 #endif
 }
@@ -472,8 +483,12 @@ ReadWriteLock::acquire_read()
 inline bool
 ReadWriteLock::attempt_read()
 {
-#if CLICK_LINUXMODULE && defined(CONFIG_SMP)
+#if ((CLICK_LINUXMODULE && defined(CONFIG_SMP)) || (CLICK_USERLEVEL && HAVE_MULTITHREAD))
+# if CLICK_LINUXMODULE && defined(CONFIG_SMP)
     click_processor_t my_cpu = click_get_processor();
+# else
+    click_processor_t my_cpu = click_current_cpu_id();
+# endif
     bool result = _l[my_cpu]._lock.attempt();
     if (!result)
 	click_put_processor();
@@ -492,8 +507,13 @@ ReadWriteLock::attempt_read()
 inline void
 ReadWriteLock::release_read()
 {
-#if CLICK_LINUXMODULE && defined(CONFIG_SMP)
-    _l[click_current_processor()]._lock.release();
+#if ((CLICK_LINUXMODULE && defined(CONFIG_SMP)) || (CLICK_USERLEVEL && HAVE_MULTITHREAD))
+# if CLICK_LINUXMODULE && defined(CONFIG_SMP)
+    click_processor_t my_cpu = click_current_processor();
+# else
+    click_processor_t my_cpu = click_current_cpu_id();
+# endif
+    _l[my_cpu]._lock.release();
     click_put_processor();
 #endif
 }
@@ -510,8 +530,12 @@ ReadWriteLock::release_read()
 inline void
 ReadWriteLock::acquire_write()
 {
-#if CLICK_LINUXMODULE && defined(CONFIG_SMP)
+#if ((CLICK_LINUXMODULE && defined(CONFIG_SMP)) || (CLICK_USERLEVEL && HAVE_MULTITHREAD))
+# if CLICK_LINUXMODULE && defined(CONFIG_SMP)
     for (unsigned i = 0; i < (unsigned) num_possible_cpus(); i++)
+# else
+    for (unsigned i = 0; i < (unsigned) click_max_cpu_ids(); i++)
+# endif
 	_l[i]._lock.acquire();
 #endif
 }
@@ -529,10 +553,14 @@ ReadWriteLock::acquire_write()
 inline bool
 ReadWriteLock::attempt_write()
 {
-#if CLICK_LINUXMODULE && defined(CONFIG_SMP)
+#if ((CLICK_LINUXMODULE && defined(CONFIG_SMP)) || (CLICK_USERLEVEL && HAVE_MULTITHREAD))
     bool all = true;
     unsigned i;
+# if CLICK_LINUXMODULE && defined(CONFIG_SMP)
     for (i = 0; i < (unsigned) num_possible_cpus(); i++)
+# else
+    for (i = 0; i < (unsigned) click_max_cpu_ids(); i++)
+# endif
 	if (!(_l[i]._lock.attempt())) {
 	    all = false;
 	    break;
@@ -557,8 +585,12 @@ ReadWriteLock::attempt_write()
 inline void
 ReadWriteLock::release_write()
 {
-#if CLICK_LINUXMODULE && defined(CONFIG_SMP)
+#if ((CLICK_LINUXMODULE && defined(CONFIG_SMP)) || (CLICK_USERLEVEL && HAVE_MULTITHREAD))
+# if CLICK_LINUXMODULE && defined(CONFIG_SMP)
     for (unsigned i = 0; i < (unsigned) num_possible_cpus(); i++)
+# else
+    for (unsigned i = 0; i < (unsigned) click_max_cpu_ids(); i++)
+# endif
 	_l[i]._lock.release();
 #endif
 }

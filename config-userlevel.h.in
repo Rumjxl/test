@@ -14,6 +14,9 @@
 /* Define if poll() may be used to wait for file descriptor events. */
 #undef HAVE_ALLOW_POLL
 
+/* Define if epoll() may be used to wait for file descriptor events. */
+#undef HAVE_ALLOW_EPOLL
+
 /* Define if select() may be used to wait for file descriptor events. */
 #undef HAVE_ALLOW_SELECT
 
@@ -150,6 +153,9 @@
 /* Define if you have a non-emulated <poll.h> header file. */
 #undef HAVE_POLL_H
 
+/* Define if you have a <sys/epoll.h> header file. */
+#undef HAVE_SYS_EPOLL_H
+
 /* Define if you have the pselect function. */
 #undef HAVE_PSELECT
 
@@ -216,6 +222,21 @@
 
 /* Define if a Click user-level driver uses Intel DPDK. */
 #undef HAVE_DPDK
+
+/* Define if a Click user-level driver uses Boost. */
+#undef HAVE_BOOST
+
+/* Define if a Click user-level driver uses Boost context library. */
+#undef HAVE_BOOST_CONTEXT
+
+/* Define if a Click user-level driver uses OpenSSL. */
+#undef HAVE_OPENSSL
+
+/* Define if a Click user-level driver uses hugepages. */
+#undef HAVE_HUGEPAGES
+
+/* Define if a Click user-level driver uses batches among modules. */
+#undef HAVE_BATCH
 
 /* Define if Click should use Valgrind client requests. */
 #undef HAVE_VALGRIND

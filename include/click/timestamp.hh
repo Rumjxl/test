@@ -4,6 +4,8 @@
 #include <click/glue.hh>
 #include <click/type_traits.hh>
 #include <click/integers.hh>
+#include <click/machine.hh>
+#include <time.h>
 #if !CLICK_LINUXMODULE && !CLICK_BSDMODULE
 # include <math.h>
 #endif
@@ -667,6 +669,9 @@ class Timestamp { public:
     //@}
 #endif
 
+    double static cycles_per_ns;
+    static inline int timer_calibrate();
+    
   private:
 
     rep_t _t;
@@ -705,7 +710,7 @@ class Timestamp { public:
         rem = int_remainder(a, b, quot);
         div = quot;
     }
-
+    
     inline void assign_now(bool recent, bool steady, bool unwarped);
 
 #if TIMESTAMP_WARPABLE
@@ -753,6 +758,28 @@ inline Timestamp Timestamp::warped(bool steady) const {
     return t;
 }
 #endif
+
+int Timestamp::timer_calibrate()
+{
+    struct timespec sleeptime;
+    struct timespec t_start, t_end;
+    uint64_t ns, end, start;
+    sleeptime.tv_sec = 0; /* 1/2 second */
+    sleeptime.tv_nsec = 5E8; /* 1/2 second */
+    click_fence();
+    if (clock_gettime(CLOCK_MONOTONIC, &t_start) == 0) {
+	start = click_get_cycles();
+	nanosleep(&sleeptime, NULL);
+	clock_gettime(CLOCK_MONOTONIC, &t_end);
+	end = click_get_cycles();
+	ns = ((t_end.tv_sec - t_start.tv_sec) * 1E9);
+	ns += (t_end.tv_nsec - t_start.tv_nsec);
+
+	cycles_per_ns = ((double)(end - start) / (double) ns);
+	return 0;
+	}
+    return -1;
+}
 
 
 /** @brief Create a Timestamp measuring @a tv.
@@ -885,12 +912,18 @@ Timestamp::assign_now(bool recent, bool steady, bool unwarped)
 
 #elif HAVE_USE_CLOCK_GETTIME
     TIMESTAMP_DECLARE_TSP;
+//     uint64_t now = click_get_cycles() * cycles_per_ns;
+// //     click_chatter("now cycles %u ", now);
+//     tsp.tv_sec = now / nsec_per_sec;
+//     tsp.tv_nsec = now % nsec_per_sec;
+    
     if (steady)
         clock_gettime(CLOCK_MONOTONIC, &tsp);
     else
         clock_gettime(CLOCK_REALTIME, &tsp);
+    
     TIMESTAMP_RESOLVE_TSP;
-
+//TODO #elif HAVE_USE_CLOCK_RTDSC
 #else
     TIMESTAMP_DECLARE_TVP;
     gettimeofday(&tvp, (struct timezone *) 0);

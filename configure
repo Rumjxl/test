@@ -692,6 +692,10 @@ POSIX_CLOCK_LIBS
 LIBOBJS
 freebsd_includedir
 freebsd_srcdir
+BOOST_CONTEXT_LIB
+BOOST_LDFLAGS
+BOOST_CPPFLAGS
+USE_BOOST
 FINDELEMFLAGS
 all_element_groups
 element_groups
@@ -703,18 +707,21 @@ minios_dir
 xen_dir
 INCLUDE_KSYMS
 LINUXMODULE_FIXINCLUDES
-USE_DPDK
-DPDK_CFLAGS
-DPDK_LIBS
+HUGEPAGES_LIBS
+USE_HUGEPAGES
+OPENSSL_LDFLAGS
+OPENSSL_LIBS
+OPENSSL_INCLUDES
+USE_OPENSSL
+PKG_CONFIG
 DPDK_INCLUDES
-RTE_VER_MINOR
-RTE_VER_MAJOR
+USE_DPDK
 RTE_VER_MONTH
 RTE_VER_YEAR
-RTE_SDK_BIN
+RTE_VER_MINOR
+RTE_VER_MAJOR
 RTE_TARGET
 RTE_SDK
-RTE_USE_PKGCONFIG
 PTHREAD_LIBS
 AR_CREATEFLAGS
 STRIP
@@ -805,7 +812,12 @@ enable_user_multithread
 enable_select
 enable_poll
 enable_kqueue
+enable_epoll
 enable_dpdk
+enable_openssl
+with_openssl
+enable_hugepages
+enable_batch
 enable_linuxmodule
 enable_fixincludes
 enable_multithread
@@ -839,12 +851,16 @@ enable_local
 enable_radio
 enable_simple
 enable_standard
+enable_tcp
 enable_tcpudp
 enable_test
 enable_threads
 enable_wifi
 enable_experimental
 enable_skip_elements
+with_boost
+with_boost_libdir
+with_boost_context
 with_freebsd
 enable_smaller_code
 enable_int64
@@ -1504,12 +1520,16 @@ Optional Features:
   --disable-userlevel     disable user-level driver
     --enable-user-multithread
                           support userlevel multithreading
-    --enable-select=[select|poll|kqueue]
+    --enable-select=[select|poll|kqueue|epoll]
                           set file descriptor wait mechanism
     --disable-select      do not use select()
     --disable-poll        do not use poll()
     --disable-kqueue      do not use kqueue()
-    --enable-dpdk         use DPDK
+    --disable-epoll       do not use epoll_wait()
+    --enable-dpdk         use Intel DPDK
+    --enable-openssl      use OpenSSL
+    --enable-hugepages    use HugePages
+    --enable-batch        use Batch
   --disable-linuxmodule   disable Linux kernel driver
     --disable-fixincludes do not patch Linux kernel headers for C++
     --enable-multithread  support kernel multithreading
@@ -1539,6 +1559,7 @@ Optional Features:
   --enable-radio          include radio elements
   --disable-simple        do not include simple versions of other elements
   --disable-standard      do not include standard elements
+  --disable-tcp           do not include TCP elements
   --disable-tcpudp        do not include TCP and UDP elements
   --disable-test          do not include regression test elements
   --disable-threads       do not include thread management elements
@@ -1548,8 +1569,7 @@ Optional Features:
                           disable comma-separated elements
   --enable-smaller-code   generate smaller code (sometimes slower)
   --disable-int64         disable 64-bit integer support
-  --enable-nanotimestamp  enable nanosecond timestamps (default if
-                          clock_gettime is available)
+  --enable-nanotimestamp  enable nanosecond timestamps
   --enable-bound-port-transfer
                           enable port transfer function ptr optimization
   --enable-tools=WHERE    enable tools (host/build/mixed/no) [[mixed]]
@@ -1567,12 +1587,26 @@ Optional Features:
 Optional Packages:
   --with-PACKAGE[=ARG]    use PACKAGE [ARG=yes]
   --without-PACKAGE       do not use PACKAGE (same as --with-PACKAGE=no)
+  --with-openssl=DIR      root of the OpenSSL directory
   --with-xen[=PATH]       Xen source code is in PATH
   --with-minios[=PATH]    MiniOS source code is in PATH
   --with-newlib[=PATH]    Newlib is installed in PATH
   --with-lwip[=PATH]      Lwip is installed in PATH
   --with-linux[=PATH]     Linux source code is in PATH
   --with-linux-map[=FILE] filename for Linux System.map [LINUXDIR/System.map]
+  --with-boost[=ARG]      use Boost library from a standard location
+                          (ARG=yes), from the specified location (ARG=<path>),
+                          or disable it (ARG=no) [ARG=yes]
+  --with-boost-libdir=LIB_DIR
+                          Force given directory for boost libraries. Note that
+                          this will override library path detection, so use
+                          this parameter only if default library detection
+                          fails and you know exactly where your boost
+                          libraries are located.
+  --with-boost-context[=special-lib]
+                          use the Context library from boost - it is possible
+                          to specify a certain library for the linker e.g.
+                          --with-boost-context=boost_context-gcc-mt
   --with-freebsd[=SRC,INC] FreeBSD source code is in SRC [/usr/src/sys],
                           include directory is INC [/usr/include]
   --with-netmap           enable netmap [no]
@@ -3148,6 +3182,7 @@ as_fn_append ac_header_list " pwd.h"
 as_fn_append ac_header_list " grp.h"
 as_fn_append ac_header_list " execinfo.h"
 as_fn_append ac_header_list " poll.h"
+as_fn_append ac_header_list " sys/epoll.h"
 as_fn_append ac_header_list " dlfcn.h"
 as_fn_append ac_header_list " sys/mman.h"
 as_fn_append ac_header_list " stdlib.h"
@@ -6522,7 +6557,7 @@ fi
 if test "${enable_select+set}" = set; then :
   enableval=$enable_select; :
 else
-  enable_select="select poll kqueue"
+  enable_select="select poll kqueue epoll"
 fi
 
 # Check whether --enable-poll was given.
@@ -6539,11 +6574,18 @@ else
   enable_kqueue=yes
 fi
 
+# Check whether --enable-epoll was given.
+if test "${enable_epoll+set}" = set; then :
+  enableval=$enable_epoll; :
+else
+  enable_epoll=yes
+fi
+
 
 if test "$enable_select" = yes; then
-    enable_select='select poll kqueue'
+    enable_select='select poll kqueue epoll'
 elif test "$enable_select" = no; then
-    enable_select='poll kqueue'
+    enable_select='poll kqueue epoll'
 fi
 if echo "$enable_select" | grep select >/dev/null 2>&1; then
 
@@ -6560,6 +6602,11 @@ if echo "$enable_select" | grep kqueue >/dev/null 2>&1 && test "$enable_kqueue" 
 $as_echo "#define HAVE_ALLOW_KQUEUE 1" >>confdefs.h
 
 fi
+if echo "$enable_select" | grep epoll >/dev/null 2>&1 && test "$enable_epoll" = yes; then
+
+$as_echo "#define HAVE_ALLOW_EPOLL 1" >>confdefs.h
+
+fi
 
 # Check whether --enable-dpdk was given.
 if test "${enable_dpdk+set}" = set; then :
@@ -6568,32 +6615,9 @@ else
   enable_dpdk=no
 fi
 
-if test "x$enable_dpdk" != "xno"; then
 
-    { $as_echo "$as_me:${as_lineno-$LINENO}: checking for DPDK library" >&5
-$as_echo_n "checking for DPDK library... " >&6; }
-
-    if test "x$enable_dpdk" != "xyes"; then
-        RTE_SDK=$enable_dpdk
-    fi
-
-    if test -z "$RTE_SDK_BIN"; then
-        RTE_SDK_BIN=$RTE_SDK/$RTE_TARGET
-    fi
-
-    if test ! -d "$RTE_SDK_BIN"; then
-        RTE_SDK_BIN=$RTE_SDK/build/
-    fi
-
-    if test -z "$RTE_LIBNAME"; then
-        RTE_LIBNAME=dpdk
-    fi
-
-    if test -z "$RTE_SRCDIR"; then
-        RTE_SRCDIR=$RTE_SDK
-    fi
-
-    if test "x$enable_user_multithread" != "xyes"; then
+if test "x$enable_dpdk" = xyes; then
+    if test "x$enable_user_multithread" != xyes; then
         as_fn_error $? "
 =========================================
 
@@ -6601,97 +6625,394 @@ $as_echo_n "checking for DPDK library... " >&6; }
 
 =========================================" "$LINENO" 5
     fi
-
-
-    if test "x$enable_dpdk" = "xyes" && pkg-config --exists libdpdk; then
-      RTE_USE_PKGCONFIG=1
-
-      RTE_LIB=$(pkg-config --variable=libdir libdpdk)
-      RTE_INCLUDE=$(pkg-config --variable=includedir libdpdk)
-      rte_ver_year=`grep "#define RTE_VER_YEAR" "$RTE_INCLUDE/rte_build_config.h" | head -n 1 | awk '{print $3}'`
-      rte_ver_month=`grep "#define RTE_VER_MONTH" "$RTE_INCLUDE/rte_build_config.h" | head -n 1 | awk '{print $3}'`
-      rte_ver_minor=`grep "#define RTE_VER_MINOR" "$RTE_INCLUDE/rte_build_config.h" | head -n 1 | awk '{print $3}'`
-      rte_ver_major=$rte_ver_year
-
-      if test "x$enable_dynamic_linking" = xyes; then
-        DPDK_LIBS=$(pkg-config --libs libdpdk)
-      else
-        DPDK_LIBS=$(pkg-config --libs --static libdpdk)
-      fi
-	  DPDK_CFLAGS=$(pkg-config --cflags libdpdk)
-      { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
-$as_echo "yes" >&6; }
-    else
-      RTE_USE_PKGCONFIG=0
-
-      RTE_INCLUDE=${RTE_SDK_BIN}/include/
-      RTE_LIB="$RTE_SDK_BIN/lib"
-      if test ! -f "$RTE_SDK_BIN/include/rte_eal.h"; then
+    if test ! -f "$RTE_SDK/$RTE_TARGET/include/rte_eal.h"; then
         as_fn_error $? "
 =========================================
 
-Cannot find \$RTE_SDK_BIN/include/rte_eal.h for DPDK.
-Define \$RTE_SDK and \$RTE_TARGET as per DPDK documentation,
-or install DPDK using meson, or the system package manager.
-Note with the system package manager, you need the devel package
-version (dpdk-dev or dpdk-devel).
+Cannot find \$RTE_SDK/\$RTE_TARGET/include/rte_eal.h for Intel DPDK.
+Define \$RTE_SDK and \$RTE_TARGET as per Intel DPDK documentation.
 
 =========================================" "$LINENO" 5
-      fi
+    fi
+    if test ! -f "$RTE_SDK/$RTE_TARGET/lib/librte_eal.a"; then
+        as_fn_error $? "
+=========================================
 
-      { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes, found at $RTE_SDK_BIN" >&5
-$as_echo "yes, found at $RTE_SDK_BIN" >&6; }
+Cannot find \$RTE_SDK/\$RTE_TARGET/lib/librte_eal.a for Intel DPDK.
+Define \$RTE_SDK and \$RTE_TARGET as per Intel DPDK documentation.
 
-      if test -z "$RTE_TARGET" ; then
-            as_fn_error $? "
-You must define \$RTE_TARGET when building DPDK with make.
-                          " "$LINENO" 5
-      fi
+=========================================" "$LINENO" 5
+    fi
+    rte_ver_major=`grep "#define RTE_VER_MAJOR" "$RTE_SDK/$RTE_TARGET/include/rte_version.h" | head -n 1 | awk '{print $3}'`
+    rte_ver_minor=`grep "#define RTE_VER_MINOR" "$RTE_SDK/$RTE_TARGET/include/rte_version.h" | head -n 1 | awk '{print $3}'`
+    rte_ver_year=`grep "#define RTE_VER_YEAR" "$RTE_SDK/$RTE_TARGET/include/rte_version.h" | head -n 1 | awk '{print $3}'`
+    rte_ver_month=`grep "#define RTE_VER_MONTH" "$RTE_SDK/$RTE_TARGET/include/rte_version.h" | head -n 1 | awk '{print $3}'`
+    dpdk_includes="-I$RTE_SDK/$RTE_TARGET/include"
 
-      if test -e "$RTE_SRCDIR/VERSION"; then
-        rte_ver_year=`cat $RTE_SRCDIR/VERSION | sed -e 's/-rc/.-rc./' -e 's/$/..99/' | awk -F '.' '{print int($1)}'`
-        rte_ver_month=`cat $RTE_SRCDIR/VERSION | sed -e 's/-rc/.-rc./' -e 's/$/..99/' | awk -F '.' '{print int($2)}'`
-        rte_ver_minor=`cat $RTE_SRCDIR/VERSION | sed -e 's/-rc/.-rc./' -e 's/$/..99/' | awk -F '.' '{print int($3)}'`
-        rte_ver_major=$rte_ver_year
-      else
-        if grep "#define RTE_VER_MAJOR" "$RTE_SDK_BIN/include/rte_config.h" &> /dev/null; then
-            verfile=rte_config
-        else
-            verfile=rte_version
-        fi
-        rte_ver_year=`grep "#define RTE_VER_YEAR" "$RTE_SDK_BIN/include/$verfile.h" | head -n 1 | awk '{print $3}'`
-        rte_ver_month=`grep "#define RTE_VER_MONTH" "$RTE_SDK_BIN/include/$verfile.h" | head -n 1 | awk '{print $3}'`
-        rte_ver_minor=`grep "#define RTE_VER_MINOR" "$RTE_SDK_BIN/include/$verfile.h" | head -n 1 | awk '{print $3}'`
-        rte_ver_major=`grep "#define RTE_VER_MAJOR" "$RTE_SDK_BIN/include/$verfile.h" | head -n 1 | awk '{print $3}'`
-      fi
-      dpdk_vars=`cd userlevel/dpdk/ && make -s RTE_SDK=$RTE_SDK RTE_TARGET=$RTE_TARGET RTE_VER_YEAR=$rte_ver_year RTE_VER_MONTH=$rte_ver_month RTE_VER_MAJOR=$rte_ver_major RTE_VER_MINOR=$rte_ver_minor`
-      eval $dpdk_vars
+    if test "x$rte_ver_major" = x; then
+        rte_ver_major=0
     fi
 
 
-
-
-    RTE_VER_YEAR=$rte_ver_year
-
-    RTE_VER_MONTH=$rte_ver_month
 
     RTE_VER_MAJOR=$rte_ver_major
 
     RTE_VER_MINOR=$rte_ver_minor
 
-    DPDK_INCLUDES=-I${RTE_INCLUDE}
+    RTE_VER_YEAR=$rte_ver_year
 
-    DPDK_LIBS=${DPDK_LIBS}
-
-    DPDK_CFLAGS=${DPDK_CFLAGS}
-
+    RTE_VER_MONTH=$rte_ver_month
 
     $as_echo "#define HAVE_DPDK 1" >>confdefs.h
 
     USE_DPDK=yes
 
+	DPDK_INCLUDES=$dpdk_includes
 
 fi
+
+# Check whether --enable-openssl was given.
+if test "${enable_openssl+set}" = set; then :
+  enableval=$enable_openssl; :
+else
+  enable_openssl=no
+fi
+
+
+if test "x$enable_openssl" = xyes; then
+    if test "x$enable_userlevel" != xyes; then
+        as_fn_error $? "
+=========================================
+
+--enable-openssl requires --enable-userlevel which was not provided.
+
+=========================================" "$LINENO" 5
+    fi
+
+
+    found=false
+
+# Check whether --with-openssl was given.
+if test "${with_openssl+set}" = set; then :
+  withval=$with_openssl;
+            case "$withval" in
+            "" | y | ye | yes | n | no)
+            as_fn_error $? "Invalid --with-openssl value" "$LINENO" 5
+              ;;
+            *) ssldirs="$withval"
+              ;;
+            esac
+
+else
+
+            # if pkg-config is installed and openssl has installed a .pc file,
+            # then use that information and don't search ssldirs
+            if test -n "$ac_tool_prefix"; then
+  # Extract the first word of "${ac_tool_prefix}pkg-config", so it can be a program name with args.
+set dummy ${ac_tool_prefix}pkg-config; ac_word=$2
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for $ac_word" >&5
+$as_echo_n "checking for $ac_word... " >&6; }
+if ${ac_cv_prog_PKG_CONFIG+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  if test -n "$PKG_CONFIG"; then
+  ac_cv_prog_PKG_CONFIG="$PKG_CONFIG" # Let the user override the test.
+else
+as_save_IFS=$IFS; IFS=$PATH_SEPARATOR
+for as_dir in $PATH
+do
+  IFS=$as_save_IFS
+  test -z "$as_dir" && as_dir=.
+    for ac_exec_ext in '' $ac_executable_extensions; do
+  if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
+    ac_cv_prog_PKG_CONFIG="${ac_tool_prefix}pkg-config"
+    $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
+    break 2
+  fi
+done
+  done
+IFS=$as_save_IFS
+
+fi
+fi
+PKG_CONFIG=$ac_cv_prog_PKG_CONFIG
+if test -n "$PKG_CONFIG"; then
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: $PKG_CONFIG" >&5
+$as_echo "$PKG_CONFIG" >&6; }
+else
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+fi
+
+
+fi
+if test -z "$ac_cv_prog_PKG_CONFIG"; then
+  ac_ct_PKG_CONFIG=$PKG_CONFIG
+  # Extract the first word of "pkg-config", so it can be a program name with args.
+set dummy pkg-config; ac_word=$2
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for $ac_word" >&5
+$as_echo_n "checking for $ac_word... " >&6; }
+if ${ac_cv_prog_ac_ct_PKG_CONFIG+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  if test -n "$ac_ct_PKG_CONFIG"; then
+  ac_cv_prog_ac_ct_PKG_CONFIG="$ac_ct_PKG_CONFIG" # Let the user override the test.
+else
+as_save_IFS=$IFS; IFS=$PATH_SEPARATOR
+for as_dir in $PATH
+do
+  IFS=$as_save_IFS
+  test -z "$as_dir" && as_dir=.
+    for ac_exec_ext in '' $ac_executable_extensions; do
+  if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
+    ac_cv_prog_ac_ct_PKG_CONFIG="pkg-config"
+    $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
+    break 2
+  fi
+done
+  done
+IFS=$as_save_IFS
+
+fi
+fi
+ac_ct_PKG_CONFIG=$ac_cv_prog_ac_ct_PKG_CONFIG
+if test -n "$ac_ct_PKG_CONFIG"; then
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_ct_PKG_CONFIG" >&5
+$as_echo "$ac_ct_PKG_CONFIG" >&6; }
+else
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+fi
+
+  if test "x$ac_ct_PKG_CONFIG" = x; then
+    PKG_CONFIG=""
+  else
+    case $cross_compiling:$ac_tool_warned in
+yes:)
+{ $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: using cross tools not prefixed with host triplet" >&5
+$as_echo "$as_me: WARNING: using cross tools not prefixed with host triplet" >&2;}
+ac_tool_warned=yes ;;
+esac
+    PKG_CONFIG=$ac_ct_PKG_CONFIG
+  fi
+else
+  PKG_CONFIG="$ac_cv_prog_PKG_CONFIG"
+fi
+
+            if test x"$PKG_CONFIG" != x""; then
+                OPENSSL_LDFLAGS=`$PKG_CONFIG openssl --libs-only-L 2>/dev/null`
+                if test $? = 0; then
+                    OPENSSL_LIBS=`$PKG_CONFIG openssl --libs-only-l 2>/dev/null`
+                    OPENSSL_INCLUDES=`$PKG_CONFIG openssl --cflags-only-I 2>/dev/null`
+                    found=true
+                fi
+            fi
+
+            # no such luck; use some default ssldirs
+            if ! $found; then
+                ssldirs="/usr/local/ssl /usr/lib/ssl /usr/ssl /usr/pkg /usr/local /usr"
+            fi
+
+
+fi
+
+
+
+    # note that we #include <openssl/foo.h>, so the OpenSSL headers have to be in
+    # an 'openssl' subdirectory
+
+    if ! $found; then
+        OPENSSL_INCLUDES=
+        for ssldir in $ssldirs; do
+            { $as_echo "$as_me:${as_lineno-$LINENO}: checking for openssl/ssl.h in $ssldir" >&5
+$as_echo_n "checking for openssl/ssl.h in $ssldir... " >&6; }
+            if test -f "$ssldir/include/openssl/ssl.h"; then
+                OPENSSL_INCLUDES="-I$ssldir/include"
+                OPENSSL_LDFLAGS="-L$ssldir/lib"
+                OPENSSL_LIBS="-lssl -lcrypto"
+                found=true
+                { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
+$as_echo "yes" >&6; }
+                break
+            else
+                { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+            fi
+        done
+
+        # if the file wasn't found, well, go ahead and try the link anyway -- maybe
+        # it will just work!
+    fi
+
+    # try the preprocessor and linker with our new flags,
+    # being careful not to pollute the global LIBS, LDFLAGS, and CPPFLAGS
+
+    { $as_echo "$as_me:${as_lineno-$LINENO}: checking whether compiling and linking against OpenSSL works" >&5
+$as_echo_n "checking whether compiling and linking against OpenSSL works... " >&6; }
+    echo "Trying link with OPENSSL_LDFLAGS=$OPENSSL_LDFLAGS;" \
+        "OPENSSL_LIBS=$OPENSSL_LIBS; OPENSSL_INCLUDES=$OPENSSL_INCLUDES" >&5
+
+    save_LIBS="$LIBS"
+    save_LDFLAGS="$LDFLAGS"
+    save_CPPFLAGS="$CPPFLAGS"
+    LDFLAGS="$LDFLAGS $OPENSSL_LDFLAGS"
+    LIBS="$OPENSSL_LIBS $LIBS"
+    CPPFLAGS="$OPENSSL_INCLUDES $CPPFLAGS"
+    cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+#include <openssl/ssl.h>
+int
+main ()
+{
+SSL_new(NULL)
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_cxx_try_link "$LINENO"; then :
+
+            { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
+$as_echo "yes" >&6; }
+            USE_OPENSSL=yes
+
+
+else
+
+            { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+            USE_OPENSSL=no
+
+
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+    CPPFLAGS="$save_CPPFLAGS"
+    LDFLAGS="$save_LDFLAGS"
+    LIBS="$save_LIBS"
+
+
+
+
+
+
+    if test "x$USE_OPENSSL" = xno; then
+        as_fn_error $? "
+=========================================
+
+Cannot find OpenSSL library (cannot compile with --enable-openssl).
+
+=========================================" "$LINENO" 5
+    fi
+
+    $as_echo "#define HAVE_OPENSSL 1" >>confdefs.h
+
+fi
+
+
+# Check whether --enable-hugepages was given.
+if test "${enable_hugepages+set}" = set; then :
+  enableval=$enable_hugepages; :
+else
+  enable_hugepages=no
+fi
+
+
+if test "x$enable_hugepages" = xyes; then
+    if test "x$enable_userlevel" != xyes; then
+as_fn_error $? "
+=========================================
+
+--enable-hugepages requires --enable-userlevel which was not provided.
+
+=========================================" "$LINENO" 5
+   fi
+
+   { $as_echo "$as_me:${as_lineno-$LINENO}: checking for get_huge_pages in -lhugetlbfs" >&5
+$as_echo_n "checking for get_huge_pages in -lhugetlbfs... " >&6; }
+if ${ac_cv_lib_hugetlbfs_get_huge_pages+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-lhugetlbfs  $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char get_huge_pages ();
+int
+main ()
+{
+return get_huge_pages ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_cxx_try_link "$LINENO"; then :
+  ac_cv_lib_hugetlbfs_get_huge_pages=yes
+else
+  ac_cv_lib_hugetlbfs_get_huge_pages=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_hugetlbfs_get_huge_pages" >&5
+$as_echo "$ac_cv_lib_hugetlbfs_get_huge_pages" >&6; }
+if test "x$ac_cv_lib_hugetlbfs_get_huge_pages" = xyes; then :
+  USE_HUGEPAGES=yes
+
+else
+  USE_HUGEPAGES=no
+
+fi
+
+
+    if test "x$USE_HUGEPAGES" = xno; then
+        as_fn_error $? "
+=========================================
+
+Cannot find libhugetlbfs library for huge page support (cannot compile with --enable-hugepages). Try installing libhugetlbfs-dev
+
+=========================================" "$LINENO" 5
+    else
+	HUGEPAGES_LIBS="-lhugetlbfs"
+
+	$as_echo "#define HAVE_HUGEPAGES 1" >>confdefs.h
+
+    fi
+
+
+fi
+
+
+# Check whether --enable-batch was given.
+if test "${enable_batch+set}" = set; then :
+  enableval=$enable_batch; :
+else
+  enable_batch=no
+fi
+
+
+if test "x$enable_batch" = xyes; then
+    if test "x$enable_userlevel" != xyes; then
+as_fn_error $? "
+=========================================
+
+--enable-batch requires --enable-userlevel which was not provided.
+
+=========================================" "$LINENO" 5
+   fi
+
+   $as_echo "#define HAVE_BATCH 1" >>confdefs.h
+
+
+fi
+
 
 
 # Check whether --enable-linuxmodule was given.
@@ -7224,6 +7545,17 @@ if test "x$enable_standard" = xyes; then
     :
 
 fi
+# Check whether --enable-tcp was given.
+if test "${enable_tcp+set}" = set; then :
+  enableval=$enable_tcp;
+else
+  enable_tcp=yes
+fi
+test "x$enable_all_elements" = xyes -a \( "x$enable_tcp" = xNO -o "x$enable_tcp" = x \) && enable_tcp=yes
+if test "x$enable_tcp" = xyes; then
+    :
+
+fi
 # Check whether --enable-tcpudp was given.
 if test "${enable_tcpudp+set}" = set; then :
   enableval=$enable_tcpudp;
@@ -7298,6 +7630,561 @@ if test "x$enable_skip_elements" != xno -a "x$enable_skip_elements" != xyes; the
 fi
 
 
+if test "x$enable_tcp" = xyes; then
+
+
+# Check whether --with-boost was given.
+if test "${with_boost+set}" = set; then :
+  withval=$with_boost;
+    if test "$withval" = "no"; then
+        want_boost="no"
+    elif test "$withval" = "yes"; then
+        want_boost="yes"
+        ac_boost_path=""
+    else
+        want_boost="yes"
+        ac_boost_path="$withval"
+    fi
+
+else
+  want_boost="yes"
+fi
+
+
+
+
+# Check whether --with-boost-libdir was given.
+if test "${with_boost_libdir+set}" = set; then :
+  withval=$with_boost_libdir;
+        if test -d "$withval"
+        then
+                ac_boost_lib_path="$withval"
+        else
+                as_fn_error $? "--with-boost-libdir expected directory name" "$LINENO" 5
+        fi
+
+else
+  ac_boost_lib_path=""
+
+fi
+
+
+if test "x$want_boost" = "xyes"; then
+    boost_lib_version_req=1.51
+    boost_lib_version_req_shorten=`expr $boost_lib_version_req : '\([0-9]*\.[0-9]*\)'`
+    boost_lib_version_req_major=`expr $boost_lib_version_req : '\([0-9]*\)'`
+    boost_lib_version_req_minor=`expr $boost_lib_version_req : '[0-9]*\.\([0-9]*\)'`
+    boost_lib_version_req_sub_minor=`expr $boost_lib_version_req : '[0-9]*\.[0-9]*\.\([0-9]*\)'`
+    if test "x$boost_lib_version_req_sub_minor" = "x" ; then
+        boost_lib_version_req_sub_minor="0"
+        fi
+    WANT_BOOST_VERSION=`expr $boost_lib_version_req_major \* 100000 \+  $boost_lib_version_req_minor \* 100 \+ $boost_lib_version_req_sub_minor`
+    { $as_echo "$as_me:${as_lineno-$LINENO}: checking for boostlib >= $boost_lib_version_req" >&5
+$as_echo_n "checking for boostlib >= $boost_lib_version_req... " >&6; }
+    succeeded=no
+
+                        libsubdirs="lib"
+    ax_arch=`uname -m`
+    case $ax_arch in
+      x86_64)
+        libsubdirs="lib64 libx32 lib lib64"
+        ;;
+      ppc64|s390x|sparc64|aarch64|ppc64le)
+        libsubdirs="lib64 lib lib64 ppc64le"
+        ;;
+    esac
+
+
+    libsubdirs="lib/${host_cpu}-${host_os} $libsubdirs"
+
+    case ${host_cpu} in
+      i?86)
+        libsubdirs="lib/i386-${host_os} $libsubdirs"
+        ;;
+    esac
+
+                if test "$ac_boost_path" != ""; then
+        BOOST_CPPFLAGS="-I$ac_boost_path/include"
+        for ac_boost_path_tmp in $libsubdirs; do
+                if test -d "$ac_boost_path"/"$ac_boost_path_tmp" ; then
+                        BOOST_LDFLAGS="-L$ac_boost_path/$ac_boost_path_tmp"
+                        break
+                fi
+        done
+    elif test "$cross_compiling" != yes; then
+        for ac_boost_path_tmp in /usr /usr/local /opt /opt/local ; do
+            if test -d "$ac_boost_path_tmp/include/boost" && test -r "$ac_boost_path_tmp/include/boost"; then
+                for libsubdir in $libsubdirs ; do
+                    if ls "$ac_boost_path_tmp/$libsubdir/libboost_"* >/dev/null 2>&1 ; then break; fi
+                done
+                BOOST_LDFLAGS="-L$ac_boost_path_tmp/$libsubdir"
+                BOOST_CPPFLAGS="-I$ac_boost_path_tmp/include"
+                break;
+            fi
+        done
+    fi
+
+            if test "$ac_boost_lib_path" != ""; then
+       BOOST_LDFLAGS="-L$ac_boost_lib_path"
+    fi
+
+    CPPFLAGS_SAVED="$CPPFLAGS"
+    CPPFLAGS="$CPPFLAGS $BOOST_CPPFLAGS"
+    export CPPFLAGS
+
+    LDFLAGS_SAVED="$LDFLAGS"
+    LDFLAGS="$LDFLAGS $BOOST_LDFLAGS"
+    export LDFLAGS
+
+
+    ac_ext=cpp
+ac_cpp='$CXXCPP $CPPFLAGS'
+ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
+ac_link='$CXX -o conftest$ac_exeext $CXXFLAGS $CPPFLAGS $LDFLAGS conftest.$ac_ext $LIBS >&5'
+ac_compiler_gnu=$ac_cv_cxx_compiler_gnu
+
+        cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+    #include <boost/version.hpp>
+
+int
+main ()
+{
+
+    #if BOOST_VERSION >= $WANT_BOOST_VERSION
+    // Everything is okay
+    #else
+    #  error Boost version is too old
+    #endif
+
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_cxx_try_compile "$LINENO"; then :
+
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
+$as_echo "yes" >&6; }
+    succeeded=yes
+    found_system=yes
+
+fi
+rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
+    ac_ext=cpp
+ac_cpp='$CXXCPP $CPPFLAGS'
+ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
+ac_link='$CXX -o conftest$ac_exeext $CXXFLAGS $CPPFLAGS $LDFLAGS conftest.$ac_ext $LIBS >&5'
+ac_compiler_gnu=$ac_cv_cxx_compiler_gnu
+
+
+
+
+            if test "x$succeeded" != "xyes"; then
+        CPPFLAGS="$CPPFLAGS_SAVED"
+        LDFLAGS="$LDFLAGS_SAVED"
+        BOOST_CPPFLAGS=
+        BOOST_LDFLAGS=
+        _version=0
+        if test "$ac_boost_path" != ""; then
+            if test -d "$ac_boost_path" && test -r "$ac_boost_path"; then
+                for i in `ls -d $ac_boost_path/include/boost-* 2>/dev/null`; do
+                    _version_tmp=`echo $i | sed "s#$ac_boost_path##" | sed 's/\/include\/boost-//' | sed 's/_/./'`
+                    V_CHECK=`expr $_version_tmp \> $_version`
+                    if test "$V_CHECK" = "1" ; then
+                        _version=$_version_tmp
+                    fi
+                    VERSION_UNDERSCORE=`echo $_version | sed 's/\./_/'`
+                    BOOST_CPPFLAGS="-I$ac_boost_path/include/boost-$VERSION_UNDERSCORE"
+                done
+                                if test -z "$BOOST_CPPFLAGS"; then
+                    if test -d "$ac_boost_path/boost" && test -r "$ac_boost_path/boost"; then
+                        BOOST_CPPFLAGS="-I$ac_boost_path"
+                    fi
+                fi
+            fi
+        else
+            if test "$cross_compiling" != yes; then
+                for ac_boost_path in /usr /usr/local /opt /opt/local ; do
+                    if test -d "$ac_boost_path" && test -r "$ac_boost_path"; then
+                        for i in `ls -d $ac_boost_path/include/boost-* 2>/dev/null`; do
+                            _version_tmp=`echo $i | sed "s#$ac_boost_path##" | sed 's/\/include\/boost-//' | sed 's/_/./'`
+                            V_CHECK=`expr $_version_tmp \> $_version`
+                            if test "$V_CHECK" = "1" ; then
+                                _version=$_version_tmp
+                                best_path=$ac_boost_path
+                            fi
+                        done
+                    fi
+                done
+
+                VERSION_UNDERSCORE=`echo $_version | sed 's/\./_/'`
+                BOOST_CPPFLAGS="-I$best_path/include/boost-$VERSION_UNDERSCORE"
+                if test "$ac_boost_lib_path" = ""; then
+                    for libsubdir in $libsubdirs ; do
+                        if ls "$best_path/$libsubdir/libboost_"* >/dev/null 2>&1 ; then break; fi
+                    done
+                    BOOST_LDFLAGS="-L$best_path/$libsubdir"
+                fi
+            fi
+
+            if test "x$BOOST_ROOT" != "x"; then
+                for libsubdir in $libsubdirs ; do
+                    if ls "$BOOST_ROOT/stage/$libsubdir/libboost_"* >/dev/null 2>&1 ; then break; fi
+                done
+                if test -d "$BOOST_ROOT" && test -r "$BOOST_ROOT" && test -d "$BOOST_ROOT/stage/$libsubdir" && test -r "$BOOST_ROOT/stage/$libsubdir"; then
+                    version_dir=`expr //$BOOST_ROOT : '.*/\(.*\)'`
+                    stage_version=`echo $version_dir | sed 's/boost_//' | sed 's/_/./g'`
+                        stage_version_shorten=`expr $stage_version : '\([0-9]*\.[0-9]*\)'`
+                    V_CHECK=`expr $stage_version_shorten \>\= $_version`
+                    if test "$V_CHECK" = "1" -a "$ac_boost_lib_path" = "" ; then
+                        { $as_echo "$as_me:${as_lineno-$LINENO}: We will use a staged boost library from $BOOST_ROOT" >&5
+$as_echo "$as_me: We will use a staged boost library from $BOOST_ROOT" >&6;}
+                        BOOST_CPPFLAGS="-I$BOOST_ROOT"
+                        BOOST_LDFLAGS="-L$BOOST_ROOT/stage/$libsubdir"
+                    fi
+                fi
+            fi
+        fi
+
+        CPPFLAGS="$CPPFLAGS $BOOST_CPPFLAGS"
+        export CPPFLAGS
+        LDFLAGS="$LDFLAGS $BOOST_LDFLAGS"
+        export LDFLAGS
+
+        ac_ext=cpp
+ac_cpp='$CXXCPP $CPPFLAGS'
+ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
+ac_link='$CXX -o conftest$ac_exeext $CXXFLAGS $CPPFLAGS $LDFLAGS conftest.$ac_ext $LIBS >&5'
+ac_compiler_gnu=$ac_cv_cxx_compiler_gnu
+
+            cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+        #include <boost/version.hpp>
+
+int
+main ()
+{
+
+        #if BOOST_VERSION >= $WANT_BOOST_VERSION
+        // Everything is okay
+        #else
+        #  error Boost version is too old
+        #endif
+
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_cxx_try_compile "$LINENO"; then :
+
+            { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
+$as_echo "yes" >&6; }
+        succeeded=yes
+        found_system=yes
+
+fi
+rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
+        ac_ext=cpp
+ac_cpp='$CXXCPP $CPPFLAGS'
+ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
+ac_link='$CXX -o conftest$ac_exeext $CXXFLAGS $CPPFLAGS $LDFLAGS conftest.$ac_ext $LIBS >&5'
+ac_compiler_gnu=$ac_cv_cxx_compiler_gnu
+
+    fi
+
+    if test "$succeeded" != "yes" ; then
+        if test "$_version" = "0" ; then
+            { $as_echo "$as_me:${as_lineno-$LINENO}: We could not detect the boost libraries (version $boost_lib_version_req_shorten or higher). If you have a staged boost library (still not installed) please specify \$BOOST_ROOT in your environment and do not give a PATH to --with-boost option.  If you are sure you have boost installed, then check your version number looking in <boost/version.hpp>. See http://randspringer.de/boost for more documentation." >&5
+$as_echo "$as_me: We could not detect the boost libraries (version $boost_lib_version_req_shorten or higher). If you have a staged boost library (still not installed) please specify \$BOOST_ROOT in your environment and do not give a PATH to --with-boost option.  If you are sure you have boost installed, then check your version number looking in <boost/version.hpp>. See http://randspringer.de/boost for more documentation." >&6;}
+        else
+            { $as_echo "$as_me:${as_lineno-$LINENO}: Your boost libraries seems to old (version $_version)." >&5
+$as_echo "$as_me: Your boost libraries seems to old (version $_version)." >&6;}
+        fi
+        # execute ACTION-IF-NOT-FOUND (if present):
+        USE_BOOST=no
+
+    else
+
+
+
+$as_echo "#define HAVE_BOOST 1" >>confdefs.h
+
+        # execute ACTION-IF-FOUND (if present):
+        USE_BOOST=yes
+
+    fi
+
+    CPPFLAGS="$CPPFLAGS_SAVED"
+    LDFLAGS="$LDFLAGS_SAVED"
+fi
+
+
+
+    if test "x$USE_BOOST" = xyes; then
+
+
+# Check whether --with-boost-context was given.
+if test "${with_boost_context+set}" = set; then :
+  withval=$with_boost_context;
+		if test "$withval" = "no"; then
+			want_boost="no"
+		elif test "$withval" = "yes"; then
+			want_boost="yes"
+			ax_boost_user_context_lib=""
+		else
+			want_boost="yes"
+			ax_boost_user_context_lib="$withval"
+		fi
+
+else
+  want_boost="yes"
+
+fi
+
+
+	if test "x$want_boost" = "xyes"; then
+
+
+
+		CPPFLAGS_SAVED="$CPPFLAGS"
+		CPPFLAGS="$CPPFLAGS $BOOST_CPPFLAGS"
+		export CPPFLAGS
+
+		LDFLAGS_SAVED="$LDFLAGS"
+		LDFLAGS="$LDFLAGS $BOOST_LDFLAGS"
+		export LDFLAGS
+
+		{ $as_echo "$as_me:${as_lineno-$LINENO}: checking whether the Boost::Context library is available" >&5
+$as_echo_n "checking whether the Boost::Context library is available... " >&6; }
+if ${ax_cv_boost_context+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_ext=cpp
+ac_cpp='$CXXCPP $CPPFLAGS'
+ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
+ac_link='$CXX -o conftest$ac_exeext $CXXFLAGS $CPPFLAGS $LDFLAGS conftest.$ac_ext $LIBS >&5'
+ac_compiler_gnu=$ac_cv_cxx_compiler_gnu
+
+			CXXFLAGS_SAVE=$CXXFLAGS
+
+			cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+#include <boost/version.hpp>
+				  #include <boost/context/all.hpp>
+int
+main ()
+{
+
+                #if BOOST_VERSION >= 106100
+                boost::context::detail::fcontext_t fc = boost::context::detail::make_fcontext(0, 0, 0);
+                #elif BOOST_VERSION >= 105200
+				boost::context::fcontext_t fc = boost::context::make_fcontext(0, 0, 0);
+                #else
+				boost::ctx::fcontext_t fc = boost::ctxt::make_fcontext(0, 0, 0);
+                #endif
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_cxx_try_compile "$LINENO"; then :
+  ax_cv_boost_context=yes
+else
+  ax_cv_boost_context=no
+fi
+rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
+				CXXFLAGS=$CXXFLAGS_SAVE
+			ac_ext=cpp
+ac_cpp='$CXXCPP $CPPFLAGS'
+ac_compile='$CXX -c $CXXFLAGS $CPPFLAGS conftest.$ac_ext >&5'
+ac_link='$CXX -o conftest$ac_exeext $CXXFLAGS $CPPFLAGS $LDFLAGS conftest.$ac_ext $LIBS >&5'
+ac_compiler_gnu=$ac_cv_cxx_compiler_gnu
+
+
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ax_cv_boost_context" >&5
+$as_echo "$ax_cv_boost_context" >&6; }
+
+		if test "x$ax_cv_boost_context" = "xyes"; then
+
+
+
+$as_echo "#define HAVE_BOOST_CONTEXT 1" >>confdefs.h
+
+			BOOSTLIBDIR=`echo $BOOST_LDFLAGS | sed -e 's/[^\/]*//'`
+
+			if test "x$ax_boost_user_context_lib" = "x"; then
+				for libextension in `ls $BOOSTLIBDIR/libboost_context*.so* $BOOSTLIBDIR/libboost_context*.dylib* $BOOSTLIBDIR/libboost_context*.a* 2>/dev/null | sed 's,.*/,,' | sed -e 's;^lib\(boost_context.*\)\.so.*$;\1;' -e 's;^lib\(boost_context.*\)\.dylib.*$;\1;' -e 's;^lib\(boost_context.*\)\.a.*$;\1;'` ; do
+					ax_lib=${libextension}
+					as_ac_Lib=`$as_echo "ac_cv_lib_$ax_lib''_exit" | $as_tr_sh`
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for exit in -l$ax_lib" >&5
+$as_echo_n "checking for exit in -l$ax_lib... " >&6; }
+if eval \${$as_ac_Lib+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-l$ax_lib  $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char exit ();
+int
+main ()
+{
+return exit ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_cxx_try_link "$LINENO"; then :
+  eval "$as_ac_Lib=yes"
+else
+  eval "$as_ac_Lib=no"
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+eval ac_res=\$$as_ac_Lib
+	       { $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_res" >&5
+$as_echo "$ac_res" >&6; }
+if eval test \"x\$"$as_ac_Lib"\" = x"yes"; then :
+  BOOST_CONTEXT_LIB="-l$ax_lib";  link_context="yes"; break
+else
+  link_context="no"
+fi
+
+				done
+
+				if test "x$link_context" != "xyes"; then
+					for libextension in `ls $BOOSTLIBDIR/boost_context*.dll* $BOOSTLIBDIR/boost_context*.a* 2>/dev/null | sed 's,.*/,,' | sed -e 's;^\(boost_context.*\)\.dll.*$;\1;' -e 's;^\(boost_context.*\)\.a.*$;\1;'` ; do
+						ax_lib=${libextension}
+						as_ac_Lib=`$as_echo "ac_cv_lib_$ax_lib''_exit" | $as_tr_sh`
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for exit in -l$ax_lib" >&5
+$as_echo_n "checking for exit in -l$ax_lib... " >&6; }
+if eval \${$as_ac_Lib+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-l$ax_lib  $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char exit ();
+int
+main ()
+{
+return exit ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_cxx_try_link "$LINENO"; then :
+  eval "$as_ac_Lib=yes"
+else
+  eval "$as_ac_Lib=no"
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+eval ac_res=\$$as_ac_Lib
+	       { $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_res" >&5
+$as_echo "$ac_res" >&6; }
+if eval test \"x\$"$as_ac_Lib"\" = x"yes"; then :
+  BOOST_CONTEXT_LIB="-l$ax_lib";  link_context="yes"; break
+else
+  link_context="no"
+fi
+
+					done
+				fi
+
+			else
+				for ax_lib in $ax_boost_user_context_lib boost_context-$ax_boost_user_context_lib; do
+					as_ac_Lib=`$as_echo "ac_cv_lib_$ax_lib''_exit" | $as_tr_sh`
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for exit in -l$ax_lib" >&5
+$as_echo_n "checking for exit in -l$ax_lib... " >&6; }
+if eval \${$as_ac_Lib+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-l$ax_lib  $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char exit ();
+int
+main ()
+{
+return exit ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_cxx_try_link "$LINENO"; then :
+  eval "$as_ac_Lib=yes"
+else
+  eval "$as_ac_Lib=no"
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+eval ac_res=\$$as_ac_Lib
+	       { $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_res" >&5
+$as_echo "$ac_res" >&6; }
+if eval test \"x\$"$as_ac_Lib"\" = x"yes"; then :
+  BOOST_CONTEXT_LIB="-l$ax_lib";  link_context="yes"; break
+else
+  link_context="no"
+fi
+
+				done
+			fi
+
+			if test "x$ax_lib" = "x"; then
+				as_fn_error $? "Could not find a version of the library!" "$LINENO" 5
+			fi
+
+			if test "x$link_context" = "xno"; then
+				as_fn_error $? "Could not link against $ax_lib !" "$LINENO" 5
+			fi
+		fi
+
+		CPPFLAGS="$CPPFLAGS_SAVED"
+		LDFLAGS="$LDFLAGS_SAVED"
+	fi
+
+        if test "x$BOOST_CONTEXT_LIB" = x; then
+            USE_BOOST=no
+            { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: Boost::Context not found, using slower makecontext()/swapcontext()" >&5
+$as_echo "$as_me: WARNING: Boost::Context not found, using slower makecontext()/swapcontext()" >&2;}
+        fi
+    else
+        { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: Boost not found, using slower makecontext()/swapcontext()" >&5
+$as_echo "$as_me: WARNING: Boost not found, using slower makecontext()/swapcontext()" >&2;}
+    fi
+fi
 
 
 
@@ -9060,6 +9947,16 @@ $as_echo "#define HAVE_POLL_H 1" >>confdefs.h
         fi
     fi
 
+
+
+
+
+    if test x"$ac_cv_header_epoll_h" = xyes; then
+
+$as_echo "#define HAVE_EPOLL_H 1" >>confdefs.h
+
+    fi
+
 for ac_func in pselect sigaction
 do :
   as_ac_var=`$as_echo "ac_cv_func_$ac_func" | $as_tr_sh`
@@ -9133,7 +10030,11 @@ if test "x$enable_dynamic_linking" = xyes; then
 
     DL_LIBS=
 
-    { $as_echo "$as_me:${as_lineno-$LINENO}: checking for dlopen in -ldl" >&5
+    ac_fn_cxx_check_func "$LINENO" "dlopen" "ac_cv_func_dlopen"
+if test "x$ac_cv_func_dlopen" = xyes; then :
+  ac_have_dlopen=yes
+else
+  { $as_echo "$as_me:${as_lineno-$LINENO}: checking for dlopen in -ldl" >&5
 $as_echo_n "checking for dlopen in -ldl... " >&6; }
 if ${ac_cv_lib_dl_dlopen+:} false; then :
   $as_echo_n "(cached) " >&6
@@ -9171,10 +10072,6 @@ fi
 $as_echo "$ac_cv_lib_dl_dlopen" >&6; }
 if test "x$ac_cv_lib_dl_dlopen" = xyes; then :
   ac_have_dlopen=yes; DL_LIBS="-ldl"
-else
-  ac_fn_cxx_check_func "$LINENO" "dlopen" "ac_cv_func_dlopen"
-if test "x$ac_cv_func_dlopen" = xyes; then :
-  ac_have_dlopen=yes
 else
   ac_have_dlopen=no
 fi
@@ -9773,8 +10670,6 @@ main ()
     if (*(data + i) != *(data3 + i))
       return 14;
   close (fd);
-  free (data);
-  free (data3);
   return 0;
 }
 _ACEOF
@@ -11357,8 +12252,8 @@ Your Linux kernel header files cause errors when included by a C++ program.
 
 Click modifies the Linux kernel's header files to make them work with
 C++, using the program 'linuxmodule/click-linuxtool.pl'. It looks like
-your kernel header files have features that tool doesn't know how to fix.
-You can report this error to us on the Click mailing list, or, even better,
+your kernel header files have features the tool doesn't know how to fix.
+You can report this error to us via a Github issue, or, even better,
 try to fix the error. See the config.log file for more information on the
 error.
 

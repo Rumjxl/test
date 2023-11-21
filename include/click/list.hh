@@ -146,7 +146,7 @@ class List { public:
 
     /** @brief Construct an empty list. */
     List()
-	: _head(0), _tail(0) {
+	: _head(0), _tail(0), _size(0) {
     }
 
 
@@ -178,10 +178,11 @@ class List { public:
     /** @brief Return the number of elements in the list.
      * @note Takes O(N) time, where N is the number of elements. */
     size_type size() const {
-	size_type n = 0;
-	for (T *x = _head; x; x = (x->*member)._next)
-	    ++n;
-	return n;
+// 	size_type n = 0;
+// 	for (T *x = _head; x; x = (x->*member)._next)
+// 	    ++n;
+// 	return n;
+	return _size;
     }
 
 
@@ -218,6 +219,7 @@ class List { public:
 	    _tail = x;
 	_head = x;
 	(_head->*member)._prev = LIST_HEAD_MARKER;
+	_size++;
     }
 
     /** @brief Insert a new element at the end of the list.
@@ -232,6 +234,7 @@ class List { public:
 	    (_head->*member)._prev = LIST_HEAD_MARKER;
 	}
 	_tail = x;
+	_size++;
     }
 
     /** @brief Remove the element at the beginning of the list.
@@ -244,6 +247,7 @@ class List { public:
 	else
 	    _head = _tail = 0;
 	(x->*member)._next = (x->*member)._prev = 0;
+	_size--;
     }
 
     /** @brief Remove the element at the end of the list.
@@ -256,6 +260,7 @@ class List { public:
 	else
 	    _head = _tail = 0;
 	(x->*member)._next = (x->*member)._prev = 0;
+	_size--;
     }
 
 
@@ -272,6 +277,7 @@ class List { public:
 	    _head = x;
 	*pprev = x;
 	(x->*member)._next = pos;
+	_size++;
     }
 
     /** @brief Insert an element before @a it.
@@ -313,6 +319,7 @@ class List { public:
 	else
 	    _head = n;
 	(x->*member)._next = (x->*member)._prev = 0;
+	_size--;
     }
 
     /** @brief Remove the element pointed to by @a it from the list.
@@ -331,8 +338,9 @@ class List { public:
      * @param last iterator to end of removal subsequence
      * @return iterator pointing to the element after the removed subsequence */
     iterator erase(iterator first, iterator last) {
-	while (first != last)
+	while (first != last){
 	    first = erase(first);
+	}
 	return first;
     }
 
@@ -342,6 +350,7 @@ class List { public:
 	while (T *x = _head) {
 	    _head = (x->*member)._next;
 	    (x->*member)._next = (x->*member)._prev = 0;
+	    _size--;
 	}
 	_tail = 0;
     }
@@ -352,7 +361,8 @@ class List { public:
      * this list: those elements' next() and prev() members remain
      * unchanged. */
     void __clear() {
-	_head = _tail = 0;
+	_head = _tail = 0 ;
+	_size = 0 ;
     }
 
 
@@ -553,6 +563,7 @@ class List { public:
 
     T *_head;
     T *_tail;
+    size_type _size;
 
     List(const List<T, member> &x);
     List<T, member> &operator=(const List<T, member> &x);

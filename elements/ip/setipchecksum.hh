@@ -28,11 +28,15 @@ class SetIPChecksum : public Element { public:
     const char *port_count() const		{ return PORTS_1_1; }
     void add_handlers() CLICK_COLD;
 
-    Packet *simple_action(Packet *p);
+    int configure(Vector<String> &, ErrorHandler *) CLICK_COLD;
+    Packet *smaction(Packet *p);
+    void push(int, Packet *) final;
+    Packet *pull(int);
 
   private:
 
     unsigned _drops;
+    bool _sharedpkt;  // set checksum on shared packet
 
 };
 

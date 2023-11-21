@@ -35,10 +35,12 @@ SetTimestamp::configure(Vector<String> &conf, ErrorHandler *errh)
     bool first = false, delta = false;
     _tv.set_sec(-1);
     _action = ACT_NOW;
+    _steady = true;
     if (Args(conf, this, errh)
 	.read_p("TIMESTAMP", _tv)
 	.read("FIRST", first)
-	.read("DELTA", delta).complete() < 0)
+	.read("DELTA", delta)
+	.read("STEADY", _steady).complete() < 0)
 	return -1;
     if (delta)
 	return errh->error("SetTimestamp(DELTA) is deprecated, use SetTimestampDelta(TYPE FIRST)");
@@ -47,17 +49,41 @@ SetTimestamp::configure(Vector<String> &conf, ErrorHandler *errh)
 }
 
 Packet *
-SetTimestamp::simple_action(Packet *p)
+SetTimestamp::smaction(Packet *p)
 {
-    if (_action == ACT_NOW)
-	p->timestamp_anno().assign_now();
+    if (_action == ACT_NOW){
+	if (_steady)
+	    p->timestamp_anno().assign_now_steady();
+	else
+	    p->timestamp_anno().assign_now();
+    }
     else if (_action == ACT_TIME)
 	p->timestamp_anno() = _tv;
     else if (_action == ACT_FIRST_NOW)
-	FIRST_TIMESTAMP_ANNO(p).assign_now();
+	if (_steady)
+	    FIRST_TIMESTAMP_ANNO(p).assign_now_steady();
+	else
+	    FIRST_TIMESTAMP_ANNO(p).assign_now();
     else
 	FIRST_TIMESTAMP_ANNO(p) = _tv;
     return p;
+}
+
+
+void
+SetTimestamp::push(int, Packet *p)
+{
+	if (Packet *q = smaction(p))
+		output(0).push(q);
+}
+
+Packet *
+SetTimestamp::pull(int)
+{
+	if (Packet *p = input(0).pull())
+		return smaction(p);
+	else
+		return NULL;
 }
 
 CLICK_ENDDECLS

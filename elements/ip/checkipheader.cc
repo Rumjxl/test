@@ -159,7 +159,7 @@ CheckIPHeader::drop(Reason reason, Packet *p)
 }
 
 Packet *
-CheckIPHeader::simple_action(Packet *p)
+CheckIPHeader::smaction(Packet *p)
 {
   const click_ip *ip = reinterpret_cast<const click_ip *>(p->data() + _offset);
   unsigned plen = p->length() - _offset;
@@ -223,6 +223,70 @@ CheckIPHeader::simple_action(Packet *p)
   p->set_dst_ip_anno(ip->ip_dst);
 
   return(p);
+}
+
+void
+CheckIPHeader::push(int, Packet *p)
+{
+    Packet* head = NULL;
+#if HAVE_BATCH
+    Packet* curr = p;
+    Packet* prev = p;
+    Packet* next = NULL;
+    while (curr){
+	next = curr->next();
+	curr->set_next(NULL);
+	
+	Packet* r = smaction(curr);
+	if (r){    
+	    if (head == NULL)
+		head = r;
+	    else
+		prev->set_next(r);
+	    prev = r;
+	}
+
+	curr = next;
+    }
+#else
+    head = smaction(p);
+#endif //HAVE_BATCH
+    if (head)
+	output(0).push(head);
+}
+
+Packet *
+CheckIPHeader::pull(int)
+{
+    //TODO Test
+    Packet* p = input(0).pull();
+    Packet* head = NULL;
+#if HAVE_BATCH
+    Packet* curr = p;
+    Packet* prev = p;
+    Packet* next = NULL;
+    while (curr){
+	next = curr->next();
+	curr->set_next(NULL);
+	
+	Packet* r = smaction(curr);
+	if (r){    
+	    if (head == NULL)
+		head = r;
+	    else
+		prev->set_next(r);
+	    prev = r;
+	}
+
+	curr = next;
+    }
+#else
+    head = smaction(p);
+#endif //HAVE_BATCH
+    if (head)
+      return head;
+    else
+      return NULL;
 }
 
 String

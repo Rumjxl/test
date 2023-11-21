@@ -153,7 +153,6 @@ class Timer { public:
     /** @brief Return the Timer's associated home thread ID. */
     int home_thread_id() const;
 
-
     /** @brief Initialize the timer.
      * @param owner the owner element
      * @param quiet do not produce default-constructor warning if true
@@ -169,6 +168,34 @@ class Timer { public:
      * Initializing a Timer constructed by the default constructor, Timer(),
      * will produce a warning. */
     void initialize(Element *owner, bool quiet = false);
+    
+    /** @brief Initialize the timer.
+     * @param owner the owner element
+     * @param thread_id forced thread id different from owner's one 
+     * @param quiet do not produce default-constructor warning if true
+     *
+     * Before a timer can be used, it must be attached to a containing router.
+     * When that router is destroyed, the timer is automatically
+     * unscheduled.  It is safe to initialize the timer multiple times
+     * on the same router.
+     *
+     * If Click is compiled with statistics support, time spent in this
+     * Timer will be charged to the @a owner element.
+     *
+     * Initializing a Timer constructed by the default constructor, Timer(),
+     * will produce a warning. */
+    void initialize(Element *owner, unsigned int thread_id, bool quiet = false);
+    
+    /** @brief Initialize the timer.
+     * @param router the owner router
+     * @param thread_id forced thread id different from router's one 
+     * 
+     * This function is shorthand for @link
+     * Timer::initialize(Element*,bool) Timer::initialize@endlink(@a
+     * router ->@link Router::root_element root_element@endlink()).
+     * However, it is better to explicitly associate timers with real
+     * elements. */
+    void initialize(Router *router, unsigned int thread_id);
 
     /** @brief Initialize the timer.
      * @param router the owner router

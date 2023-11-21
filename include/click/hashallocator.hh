@@ -21,7 +21,8 @@ class HashAllocator { public:
 
     void swap(HashAllocator &x);
 
-  private:
+//  private:
+  protected:
 
     struct link {
 	link *next;
@@ -40,7 +41,7 @@ class HashAllocator { public:
 #else
 	max_buffer_size = 1048576,
 #endif
-	min_nelements = 8
+	min_nelements = 1024
     };
 
     link *_free;

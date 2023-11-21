@@ -174,8 +174,8 @@ ARPResponder::make_response(const uint8_t target_eth[6], /* them */
     return q;
 }
 
-Packet *
-ARPResponder::simple_action(Packet *p)
+inline Packet *
+ARPResponder::smaction(Packet *p)
 {
     const click_ether *e = (const click_ether *) p->data();
     const click_ether_arp *ea = (const click_ether_arp *) (e + 1);
@@ -194,6 +194,22 @@ ARPResponder::simple_action(Packet *p)
     else
 	checked_output_push(1, p);
     return q;
+}
+
+void
+ARPResponder::push(int, Packet *p)
+{
+    if (Packet *q = smaction(p))
+	output(0).push(q);
+}
+
+Packet *
+ARPResponder::pull(int)
+{
+    if (Packet *p = input(0).pull())
+	return smaction(p);
+    else
+	return 0;
 }
 
 String

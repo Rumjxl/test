@@ -1,209 +1,176 @@
-The Click Modular Router
-========================
-[![build status](https://github.com/kohler/click/actions/workflows/ci.yml/badge.svg)](https://github.com/kohler/click/actions/workflows/ci.yml)
+ClickNF
+---------------------
+The code published in the repository is partly described in "CliMB: Enabling Network Function Composition with 
+Click Middleboxes" paper available at https://dl.acm.org/citation.cfm?id=2940152 . CliMB provides a full-fledged 
+modular TCP layer supporting congestion control, TCP options, both blocking and nonblocking I/O, as well as socket 
+and zero-copy APIs to applications. As a result, any TCP network function may now be realized in Click. ClickNF 
+extends CliMB in several directions. For instance, ClickNF takes advantage of hardware offloading, multicore 
+scalability, timing wheels, and an epoll-based API to improve performance. Finally, L7 modularity and SSL/TLS 
+termination provide building blocks for novel network functions to be deployed with little effort. 
 
-Click is a modular router toolkit. To use it you'll need to know how to
-compile and install the software, how to write router configurations, and how
-to write new elements. Our [ACM Transactions on Computer Systems paper](http://dl.acm.org/citation.cfm?id=354874)
-will give you a feeling for what Click can do. Using the optimization tools
-under `CLICKDIR/tools`, you can get even better performance than that paper
-describes.
+**C lickNF has been presented at Usenix ATC 2018 https://www.usenix.org/conference/atc18/presentation/gallo ** 
 
-Contents
---------
+If you have any question/issue with the code, please use github or contact me at massimo.gallo@nokia-bell-labs.com
 
-Subdirectory                  | Description
------------------------------ | -------------------------------
-`CLICKDIR/apps`               | Click-related applications
-`CLICKDIR/apps/clicky`        | GTK+ program for displaying configurations and interacting with drivers
-`CLICKDIR/apps/csclient`      | Command-line program for interacting with drivers
-`CLICKDIR/apps/ClickController` | Java program for interacting with drivers
-`CLICKDIR/conf`               | example configuration files
-`CLICKDIR/doc`                | documentation
-`CLICKDIR/elements`           | element source code
-`CLICKDIR/elements/analysis`  | …for trace analysis and manipulation
-`CLICKDIR/elements/app`       | …for application-level protocols (e.g. FTP)
-`CLICKDIR/elements/aqm`       | …for active queue management (e.g. RED)
-`CLICKDIR/elements/ethernet`  | …for Ethernet
-`CLICKDIR/elements/etherswitch` | …for an Ethernet switch
-`CLICKDIR/elements/grid`      | …for the Grid mobile ad-hoc wireless network protocols
-`CLICKDIR/elements/icmp`      | …for ICMP
-`CLICKDIR/elements/ip`        | …for IPv4
-`CLICKDIR/elements/ip6`       | …for IPv6
-`CLICKDIR/elements/ipsec`     | …for IPsec
-`CLICKDIR/elements/linuxmodule` | …for the Linux kernel driver
-`CLICKDIR/elements/local`     | …for your own elements (empty)
-`CLICKDIR/elements/ns`        | …for the NS network simulator driver
-`CLICKDIR/elements/radio`     | …for communicating with wireless radios
-`CLICKDIR/elements/standard`  | …for simple protocol-generic elements
-`CLICKDIR/elements/tcpudp`    | …for TCP and UDP
-`CLICKDIR/elements/test`      | …for regression tests
-`CLICKDIR/elements/threads`   | …for thread management
-`CLICKDIR/elements/userlevel` | …for the user-level driver
-`CLICKDIR/elements/wifi`      | …for 802.11
-`CLICKDIR/etc/samplepackage`  | sample source code for Click element package
-`CLICKDIR/etc/samplellrpc`    | sample source code for reading Click LLRPCs
-`CLICKDIR/etc/diagrams`       | files for drawing Click diagrams
-`CLICKDIR/etc/libclick`       | files for standalone user-level Click library
-`CLICKDIR/include/click`      | common header files
-`CLICKDIR/include/clicknet`   | header files defining network headers
-`CLICKDIR/lib`                | common non-element source code
-`CLICKDIR/linuxmodule`        | Linux kernel module driver
-`CLICKDIR/ns`                 | NS driver (integrates with the NS simulator)
-`CLICKDIR/test`               | regression tests
-`CLICKDIR/tools`              | Click tools
-`CLICKDIR/tools/lib`          | …common code for tools
-`CLICKDIR/tools/click-align`  | …enforces alignment for non-x86 machines
-`CLICKDIR/tools/click-combine` | …merges routers into combined configuration
-`CLICKDIR/tools/click-devirtualize` | …removes virtual functions from source
-`CLICKDIR/tools/click-fastclassifier` | …specializes Classifiers into C++ code
-`CLICKDIR/tools/click-mkmindriver` | …build environments for minimal drivers
-`CLICKDIR/tools/click-install` | …installs configuration into kernel module
-`CLICKDIR/tools/click-pretty` | …pretty-prints Click configuration as HTML
-`CLICKDIR/tools/click-undead` | …removes dead code from configurations
-`CLICKDIR/tools/click-xform`  | …pattern-based configuration optimizer
-`CLICKDIR/tools/click2xml`    | …convert Click language <-> XML
-`CLICKDIR/userlevel`          | user-level driver
-
-
-Documentation
--------------
-
-The `INSTALL.md` file in this directory contains installation instructions. User
-documentation is in the `doc` subdirectory, which contains manual pages for
-the Click language, the Linux kernel module, and several tools; it also has a
-script that generates manual pages for many of the elements distributed in
-this package. To install these manual pages so you can read them, follow the
-`INSTALL.md` instructions, but `make install-man` instead of `make install`.
-
-
-Running a Click Router
-----------------------
-
-Before playing with a Click router, you should get familiar with the Click
-configuration language. You use this to tell Click how to process packets. The
-language describes a graph of “elements,” or packet processing modules. See
-the `doc/click.5` manual page for a detailed description, or check the `conf`
-directory for some simple examples.
-
-Click can be compiled as a user-level program or as a kernel module for Linux.
-Either driver can receive and send packets; the kernel module directly
-interacts with device drivers, while the user-level driver uses packet sockets
-(on Linux) or the pcap library (everywhere else).
-
-### User-Level Program
-
-Run the user-level program by giving it the name of a configuration file:
-`click CONFIGFILE`.
-
-### Linux Kernel Module
-
-See the `doc/click.o.8` manual page for a detailed description. To summarize,
-install a configuration by running `click-install CONFIGFILE`. This will also
-install the kernel module if necessary and report any errors to standard
-error. (You must run `make install` before `click-install` will work.)
-
-### NS-3 Simulator
-
-See `INSTALL.md` for more information. Further information on NS-3 and Click is
-available in [the NS-3 manual](http://www.nsnam.org/docs/models/html/click.html).
-
-### NS-2 Simulator
-
-See `INSTALL.md` for more information.  Once a Click-enabled version of NS-2 is
-installed, the 'ns' command is able to run Click scripts as part of a normal
-NS-2 simulation.
-
-### DPDK
-
-Click’s user-level driver supports DPDK. Before running in DPDK mode, the DPDK
-must be set up properly as per the DPDK documentation. This mainly involves
-setting up huge pages and binding some NIC to the DPDK userspace driver. E.g.,
-to set up huge pages:
-
-    echo 1024 > /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages
-    mkdir -p /mnt/huge
-    mount -t hugetlbfs nodev /mnt/huge
-
-On x86_64 you might achieve better performances with 1G huge pages, which must
-be enabled through the kernel cmdline.
-
-Intel NICs use entierly userspace drivers and needs to be bound to DPDK.
-Eg., to bind eth0 to DPDK:
-
-    modprobe uio_pci_generic
-    dpdk/tools/dpdk_nic_bind.py --bind=uio_pci_generic eth0
-
-Refer to the [DPDK documentation](https://doc.dpdk.org/guides/linux_gsg/sys_reqs.html?highlight=hugepages) for more details about huge pages and binding
-devices.
-
-Unlike most other DPDK applications, you have to pass DPDK EAL arguments
-between `--dpdk` and `--`, then pass Click arguments. As the DPDK EAL will
-handle thread management instead of Click, Click's `-j`/`--threads` argument
-will be disabled when `--dpdk` is active. You should give at least the
-following two EAL arguments for best practice. This is required with older
-versions of DPDK, even if running on a single core:
-
-* `-c COREMASK`: hexadecimal bitmask of cores to run on
-* `-n NUM`: number of memory channels
-
-If `-c` or `-l` is not provided, DPDK will use all available cores.
-
-A sample command to run a click configuration on 4 cores on a computer with 4
-memory channels and listen for control connections on TCP port 8080 would be:
-
-    click --dpdk -c 0xf -n 4 -- -p 8080 configfile
-
-If Click is launched without `--dpdk`, it will run in normal userlevel mode
-without involving DPDK EAL, meaning that any DPDK element will not work.
-
-### Configurations
-
-Some sample configurations are included in the `conf` directory, including a
-Perl script that generated the IP router configurations used in our TOCS paper
-(`conf/make-ip-conf.pl`) and a set of patterns for the `click-xform` pattern
-optimizer (`conf/ip.clickpat`).
-
-
-Adding Your Own Elements
-------------------------
-
-Please see the FAQ in this directory to learn how to add elements to Click.
-
-
-Copyright and License
+COPYRIGHT AND LICENSE
 ---------------------
 
-Most of Click is distributed under the Click license, a version of the MIT
-License. See the `LICENSE` file for details. Each source file should identify
-its license. Source files that do not identify a specific license are covered
+ClickNF is a fork of the original Click project available under https://github.com/kohler/click The code directly 
+modified from Click is distributed under the Click license, a version of the MIT License. See the 'LICENSE' file for 
+details Each source file should identify its license. Source files that do not identify a specific license are covered 
 by the Click license.
 
-Parts of Click are distributed under different licenses. The specific licenses
-are listed below.
+As for Click some parts of the code are distributed under a different license. The specific licenses are listed below.
 
-* `drivers/e1000*`, `etc/linux-*-patch`, `linuxmodule/proclikefs.c`: These
-  portions of the Click software are derived from the Linux kernel, and are
-  thus distributed under the GNU General Public License, version 2. The GNU
-  General Public License is available [via the Web](http://www.gnu.org/licenses/gpl.html) and
-  in `etc/COPYING`.
+drivers/e1000*, etc/linux-*-patch, linuxmodule/proclikefs.c: These portions of the Click software are derived from the 
+Linux kernel, and are thus distributed under the GNU General Public License, version 2. The GNU General Public License 
+is available via the Web at <http://www.gnu.org/licenses/gpl.html>, or in the COPYING file in this directory.
 
-* `include/click/bigint.hh`: This portion of the Click software derives from
-  the GNU Multiple Precision Arithmetic Library, and is thus distributed under
-  the GNU Lesser General Public License, version 3. This license is available
-  [via the Web](http://www.gnu.org/licenses/lgpl.html) and in `etc/COPYING.lgpl`.
+include/click/bigint.hh: This portion of the Click software derives from the GNU Multiple Precision Arithmetic Library, 
+and is thus distributed under the GNU Lesser General Public License, version 3. This license is available via the Web 
+at <http://www.gnu.org/licenses/lgpl.html>. The LGPL specifically permits direct linking with code with other licenses. 
 
-Element code that uses only Click’s interfaces will *not* be derived from the
-Linux kernel. (For instance, those interfaces have multiple implementations,
-including some that run at user level.) Thus, for element code that uses only
-Click’s interfaces, the BSD-like Click license applies, not the GPL or the
-LGPL.
+elements/tcp/*, elements/userlevel/dpdk.*, elements/standard/batcher.* elements/standard/unbatcher.*, 
+elements/standard/join.*, elements/app/echoserver.*, elements/app/ssl*, lib/packetqueue.*: 
+These parts of the code refers to ClickNF and are distributed under the BSD 3-clause License.
 
+Element code that uses only Click's interfaces will *not* be derived from the Linux kernel. (For instance, those 
+interfaces have multiple implementations, including some that run at user level.) Thus, for element code that uses only 
+Click's interfaces, the BSD-like Click license applies, not the GPL or the LGPL.
 
-Bugs, Questions, etc.
----------------------
+SETUP
+-----------------------
 
-We welcome bug reports, questions, comments, code, whatever you'd like to give
-us. GitHub issues are the best way to stay in touch.
+ClickNF uses few external libraries that can be installed separately: 
 
-- The Click maintainers: [Eddie Kohler](http://www.read.seas.harvard.edu/~kohler/) and others
+1) DPDK: ClickNF has its own version of a DPDK module, i.e., different from the one already present in click codebase. ClickNF has been tested with 
+   dpdk from version 16.11 up to 18.05. To install and configure DPDK please refer to http://dpdk.org/ 
+
+2) OpenSSL: ClickNF provide a set of modules to interface with OpenSSL. To install it (Debian, Ubuntu) please use 
+
+apt-get install openssl
+
+3) libboost-1.61 context. To install libboost's context library (a coroutine library provided by libboost) please refer to 
+http://www.boost.org/ for more details about installation. Make sure libboost_context.so.1.61.0 and libboost_context.so are 
+installed in /usr/lib/x86_64-linux-gnu/
+
+ClickNF automatically uses context library if it is installed (up to libboost-1.61). If context is not installed in the system 
+ClickNF uses the slowest coroutine library provided in linux, ucontext. 
+Please refer to http://man7.org/linux/man-pages/man3/makecontext.3.html for more details. 
+
+CONFIGURE AND MAKE
+-----------------------
+
+To configure ClicNF run this command in its root directory:
+
+./configure --disable-linuxmodule --enable-user-multithread --enable-dpdk --enable-epoll --enable-openssl --enable-batch --enable-aqm;
+
+in which:
+
+- --enable-epoll 			 	enables epoll data structure
+- --enable-user-multithread --enable-dpdk 	enable DPDK input interfaces and packet wrapping (RTE_SDK and RTE_TARGET should be exported)
+- --enable-openssl 				enables ssl* elements
+- --enable-batch 				enables batch processing between elements (May need batcher and unbatcher elements in the graph)
+- --enable-aqm					enables active queue management techniques
+
+To compile ClickNF run this command in its root directory:
+
+make -j32
+
+RUN
+-----------------------
+
+To run ClickNF run this command in its root directory:
+
+sudo bin/click --dpdk -c0x01 -n10 --  conf/conf/bulk-server.click
+
+in which -c and -n are DPDK parameters sets the number of cpus and memory channels respectively. 
+
+-----------------------
+EXAMPLES
+-----------------------
+
+ClickNF applications using the TCP stack can be developed in two ways a)monolithic (everything inside a single module) b) modular by 
+exploiting ClickNF's building blocks. In the conf folder we provide four examples to showcase ClickNF functionalities. 
+The examples consists in:
+
+- monolithic bulk transfer
+- monolithic echo server
+- modular echo server
+- modular echo server with batching (configure with --enable-batch option )
+
+All the examples below uses the test-tcp-layer2.click compound element that provide TCP stack to Click. Each element 
+used in the configuration files has a number of parameters that can be used to change their behavior. Note that, to
+run the experiments, you need to change at least IP and MAC addresses in the configurations provided. 
+
+For some details about the usage of TCPEpollServer/Client building blocks used to develop modula apps, please read the modules' README in tcpepollserver.cc and tcpepollclient.cc .
+
+Bulk transfer: 
+------------------------
+
+This example consists in transferring a big file from client to the server. 
+
+First run the server with: 
+
+sudo bin/click --dpdk -c0x1 -n10 -- conf/bulk-server.click
+
+then run the client with:
+
+sudo bin/click --dpdk -c0x1 -n10 -- conf/bulk-client.click
+
+in which parameters inside --dpdk -- are dpdk parameters (-c0x1 COREMASK and -n10 MEMORY CHANNELS )
+
+To modify the TCP flavor (NewReno, DCTCP, BBR) used by the bulk-server/bulk-client edit the TCPLayer CONGCTRL parameter found in the click file. Note that NewReno is the default congestion control methodology. 
+
+To run bulk-server using TCPPrague: 
+
+First run the server with:
+
+sudo bin/click --dpdk -c0x1 -n10 -- conf/bulk-prague-server.click
+
+then run the client with:
+
+sudo bin/click --dpdk -c0x1 -n10 -- conf/bulk-prague-client.click  
+
+Echo server (monolithic):
+-------------------------
+
+This example consists in a server listening for incoming connections. Clients connect to the server, send one or more messages 
+(depending on the client parameters) and wait for echo reply. When the message is received, the client resets the connection and 
+repeat the same operation until the test is finished (the client is configured to connect a maximum number of times). 
+
+First run the server with:
+
+sudo bin/click --dpdk -c0x3 -n10 -- conf/echo-server-monolithic.click
+
+then run the client with:
+
+sudo bin/click --dpdk -c0xf -n10 -- conf/echo-client.click
+
+Echo server (modular):
+------------------------
+
+The test is similar to the previous one with the exception that the echo server is implemented using two elements instead of 
+implementing everithing inside a single element. 
+
+First run the server with:
+
+sudo bin/click --dpdk -c0x3 -n10 -- conf/echo-server-modular.click
+
+then run the client with:
+
+sudo bin/click --dpdk -c0xf -n10 -- conf/echo-client.click
+
+Echo server (modular with batching):
+------------------------------------
+
+The test is similar to the previous one with the exception, when possible, echo server's elements transmit packet 
+batches instead of single packets. Note that the code need to be recompiled configuring with --enable-batch option.
+
+First run the server with:
+
+sudo bin/click --dpdk -c0x3 -n10 -- conf/echo-server-modular-batch.click
+
+then run the client with:
+
+sudo bin/click --dpdk -c0xf -n10 -- conf/echo-client.click

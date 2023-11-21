@@ -34,9 +34,42 @@ Strip::configure(Vector<String> &conf, ErrorHandler *errh)
 }
 
 Packet *
-Strip::simple_action(Packet *p)
+Strip::smaction(Packet *p)
 {
     p->pull(_nbytes);
+    return p;
+}
+
+void
+Strip::push(int, Packet *p)
+{
+    Packet* head = p;
+#if HAVE_BATCH
+    Packet* curr = p;
+    while (curr){
+	smaction(curr);
+	curr =  curr->next();
+   }
+#else
+    head = smaction(p);
+#endif //HAVE_BATCH
+    if (head)
+	output(0).push(head);
+}
+
+Packet *
+Strip::pull(int)
+{
+    //TODO Test
+    Packet *p = input(0).pull();
+#if HAVE_BATCH
+    while (p) {
+	smaction(p);	
+	p = p->next();
+    }
+#else
+    p = smaction(p);
+#endif //HAVE_BATCH
     return p;
 }
 

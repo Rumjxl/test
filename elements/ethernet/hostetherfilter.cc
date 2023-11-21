@@ -51,7 +51,7 @@ HostEtherFilter::configure(Vector<String> &conf, ErrorHandler *errh)
 }
 
 Packet *
-HostEtherFilter::simple_action(Packet *p)
+HostEtherFilter::smaction(Packet *p)
 {
     const click_ether *e = (const click_ether *) (p->data() + _offset);
     const unsigned short *daddr = (const unsigned short *)e->ether_dhost;
@@ -73,6 +73,70 @@ HostEtherFilter::simple_action(Packet *p)
 	}
     }
     return p;
+}
+
+void
+HostEtherFilter::push(int, Packet *p)
+{
+    Packet* head = NULL;
+#if HAVE_BATCH
+    Packet* curr = p;
+    Packet* prev = p;
+    Packet* next = NULL;
+    while (curr){
+	next = curr->next();
+	curr->set_next(NULL);
+	
+	Packet* r = smaction(curr);
+	if (r){    
+	    if (head == NULL)
+		head = r;
+	    else
+		prev->set_next(r);
+	    prev = r;
+	}
+
+	curr = next;
+    }
+#else
+    head = smaction(p);
+#endif //HAVE_BATCH
+    if (head)
+	output(0).push(head);
+}
+
+Packet *
+HostEtherFilter::pull(int)
+{
+    //TODO Test
+    Packet* p = input(0).pull();
+    Packet* head = NULL;
+#if HAVE_BATCH
+    Packet* curr = p;
+    Packet* prev = p;
+    Packet* next = NULL;
+    while (curr){
+	next = curr->next();
+	curr->set_next(NULL);
+	
+	Packet* r = smaction(curr);
+	if (r){    
+	    if (head == NULL)
+		head = r;
+	    else
+		prev->set_next(r);
+	    prev = r;
+	}
+
+	curr = next;
+    }
+#else
+    head = smaction(p);
+#endif //HAVE_BATCH
+    if (head)
+      	return head;
+    else
+	return NULL;
 }
 
 void

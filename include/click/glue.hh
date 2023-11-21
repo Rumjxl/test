@@ -95,6 +95,10 @@ extern "C" int simclick_gettimeofday(struct timeval *);
 #  include <pthread.h>
 #  include <sched.h>
 # endif
+# if HAVE_DPDK && !CLICK_TOOL
+#  include <rte_config.h>
+#  include <rte_random.h>
+# endif
 
 #endif
 
@@ -169,8 +173,10 @@ inline uint32_t click_random() {
 # elif CLICK_LINUXMODULE
     click_random_seed = click_random_seed * 69069L + 5;
     return (click_random_seed ^ jiffies) & CLICK_RAND_MAX; // XXX jiffies??
-#elif CLICK_MINIOS
+# elif CLICK_MINIOS
     return rand();
+# elif HAVE_DPDK && !CLICK_TOOL
+    return (rte_rand() & CLICK_RAND_MAX);
 # elif HAVE_RANDOM && CLICK_RAND_MAX == RAND_MAX
     // See also click_random() in ns/nsclick.cc
     return random();
@@ -189,6 +195,8 @@ inline void click_srandom(uint32_t seed) {
     srand(seed);
 #elif CLICK_NS
     (void) seed; /* XXX */
+#elif HAVE_DPDK && !CLICK_TOOL
+    rte_srand(seed);
 #elif HAVE_RANDOM && CLICK_RAND_MAX == RAND_MAX
     srandom(seed);
 #else

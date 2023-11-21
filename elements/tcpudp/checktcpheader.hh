@@ -63,13 +63,13 @@ class CheckTCPHeader : public Element { public:
   int configure(Vector<String> &, ErrorHandler *) CLICK_COLD;
   void add_handlers() CLICK_COLD;
 
-  Packet *simple_action(Packet *);
-  /* inline Packet *smaction(Packet *);
-     void push(int, Packet *p);
-     Packet *pull(int); */
+  Packet *smaction(Packet *);
+  void push(int, Packet *p);
+  Packet *pull(int);
 
  private:
 
+  bool _checksum;
   bool _verbose : 1;
   atomic_uint32_t _drops;
   atomic_uint32_t *_reason_drops;

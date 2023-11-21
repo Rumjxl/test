@@ -59,7 +59,9 @@ class HostEtherFilter : public Element { public:
   int configure(Vector<String> &, ErrorHandler *) CLICK_COLD;
   bool can_live_reconfigure() const		{ return true; }
 
-  Packet *simple_action(Packet *);
+  Packet *smaction(Packet *);
+  void push(int, Packet *) final;
+  Packet *pull(int);
   void add_handlers() CLICK_COLD;
 
  private:

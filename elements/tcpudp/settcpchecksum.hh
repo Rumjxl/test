@@ -27,10 +27,14 @@ class SetTCPChecksum : public Element { public:
   const char *port_count() const		{ return PORTS_1_1; }
   int configure(Vector<String> &conf, ErrorHandler *errh) CLICK_COLD;
 
-  Packet *simple_action(Packet *);
+  Packet *smaction(Packet *);
+  void push(int, Packet *);
+  Packet *pull(int);
 
 private:
   bool _fixoff;
+  bool _sharedpkt; // set checksum on shared packet 
+
 };
 
 CLICK_ENDDECLS

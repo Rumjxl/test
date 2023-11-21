@@ -78,6 +78,7 @@ class Print : public Element { public:
     bool can_live_reconfigure() const		{ return true; }
     void add_handlers() CLICK_COLD;
 
+    Packet *action(Packet *);
     Packet *simple_action(Packet *);
 
  private:
@@ -87,7 +88,7 @@ class Print : public Element { public:
     bool _active;
     bool _timestamp : 1;
     bool _headroom : 1;
-#ifdef CLICK_LINUXMODULE
+#if (CLICK_LINUXMODULE || ( CLICK_USERLEVEL && HAVE_MULTITHREAD))
     bool _cpu : 1;
 #endif
     bool _print_anno;

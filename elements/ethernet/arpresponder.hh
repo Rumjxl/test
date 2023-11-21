@@ -87,7 +87,9 @@ class ARPResponder : public Element { public:
     bool can_live_reconfigure() const		{ return true; }
     void add_handlers() CLICK_COLD;
 
-    Packet *simple_action(Packet *);
+    inline Packet *smaction(Packet *);
+    void push(int, Packet *) final;
+    Packet *pull(int);
 
     static Packet *make_response(const uint8_t target_eth[6],
 				 const uint8_t target_ip[4],

@@ -111,20 +111,23 @@ Can't find -lpthread and/or <pthread.h>, so I can't compile with
 fi
 
 AC_ARG_ENABLE([select],
-    [AS_HELP_STRING([  --enable-select=[[select|poll|kqueue]]], [set file descriptor wait mechanism])
+    [AS_HELP_STRING([  --enable-select=[[select|poll|kqueue|epoll]]], [set file descriptor wait mechanism])
 AS_HELP_STRING([  --disable-select], [do not use select()])],
-    [:], [enable_select="select poll kqueue"])
+    [:], [enable_select="select poll kqueue epoll"])
 AC_ARG_ENABLE([poll],
     [AS_HELP_STRING([  --disable-poll], [do not use poll()])],
     [:], [enable_poll=yes])
 AC_ARG_ENABLE([kqueue],
     [AS_HELP_STRING([  --disable-kqueue], [do not use kqueue()])],
     [:], [enable_kqueue=yes])
+AC_ARG_ENABLE([epoll],
+    [AS_HELP_STRING([  --disable-epoll], [do not use epoll_wait()])],
+    [:], [enable_epoll=yes])
 
 if test "$enable_select" = yes; then
-    enable_select='select poll kqueue'
+    enable_select='select poll kqueue epoll'
 elif test "$enable_select" = no; then
-    enable_select='poll kqueue'
+    enable_select='poll kqueue epoll'
 fi
 if echo "$enable_select" | grep select >/dev/null 2>&1; then
     AC_DEFINE([HAVE_ALLOW_SELECT], [1], [Define if select() may be used to wait for file descriptor events.])
@@ -135,38 +138,16 @@ fi
 if echo "$enable_select" | grep kqueue >/dev/null 2>&1 && test "$enable_kqueue" = yes; then
     AC_DEFINE([HAVE_ALLOW_KQUEUE], [1], [Define if kqueue() may be used to wait for file descriptor events.])
 fi
+if echo "$enable_select" | grep epoll >/dev/null 2>&1 && test "$enable_epoll" = yes; then
+    AC_DEFINE([HAVE_ALLOW_EPOLL], [1], [Define if epoll_wait() may be used to wait for file descriptor events.])
+fi
 
-dnl
-dnl DPDK driver
-dnl
 AC_ARG_ENABLE([dpdk],
-              [AS_HELP_STRING([  --enable-dpdk], [use DPDK])],
-              [:], [enable_dpdk=no])
-if test "x$enable_dpdk" != "xno"; then
+    [AS_HELP_STRING([  --enable-dpdk], [use Intel DPDK])],
+    [:], [enable_dpdk=no])
 
-    AC_MSG_CHECKING([for DPDK library])
-
-    if test "x$enable_dpdk" != "xyes"; then
-        RTE_SDK=$enable_dpdk
-    fi
-
-    if test -z "$RTE_SDK_BIN"; then
-        RTE_SDK_BIN=$RTE_SDK/$RTE_TARGET
-    fi
-
-    if test ! -d "$RTE_SDK_BIN"; then
-        RTE_SDK_BIN=$RTE_SDK/build/
-    fi
-
-    if test -z "$RTE_LIBNAME"; then
-        RTE_LIBNAME=dpdk
-    fi
-
-    if test -z "$RTE_SRCDIR"; then
-        RTE_SRCDIR=$RTE_SDK
-    fi
-
-    if test "x$enable_user_multithread" != "xyes"; then
+if test "x$enable_dpdk" = xyes; then
+    if test "x$enable_user_multithread" != xyes; then
         AC_MSG_ERROR([
 =========================================
 
@@ -174,84 +155,130 @@ if test "x$enable_dpdk" != "xno"; then
 
 =========================================])
     fi
-
-
-    if test "x$enable_dpdk" = "xyes" && pkg-config --exists libdpdk; then
-      AC_SUBST(RTE_USE_PKGCONFIG, 1)
-      RTE_LIB=$(pkg-config --variable=libdir libdpdk)
-      RTE_INCLUDE=$(pkg-config --variable=includedir libdpdk)
-      rte_ver_year=`grep "#define RTE_VER_YEAR" "$RTE_INCLUDE/rte_build_config.h" | head -n 1 | awk '{print $3}'`
-      rte_ver_month=`grep "#define RTE_VER_MONTH" "$RTE_INCLUDE/rte_build_config.h" | head -n 1 | awk '{print $3}'`
-      rte_ver_minor=`grep "#define RTE_VER_MINOR" "$RTE_INCLUDE/rte_build_config.h" | head -n 1 | awk '{print $3}'`
-      rte_ver_major=$rte_ver_year
-
-      if test "x$enable_dynamic_linking" = xyes; then
-        DPDK_LIBS=$(pkg-config --libs libdpdk)
-      else
-        DPDK_LIBS=$(pkg-config --libs --static libdpdk)
-      fi
-	  DPDK_CFLAGS=$(pkg-config --cflags libdpdk)
-      AC_MSG_RESULT([yes])
-    else
-      AC_SUBST(RTE_USE_PKGCONFIG, 0)
-      RTE_INCLUDE=${RTE_SDK_BIN}/include/
-      RTE_LIB="$RTE_SDK_BIN/lib"
-      if test ! -f "$RTE_SDK_BIN/include/rte_eal.h"; then
+    if test ! -f "$RTE_SDK/$RTE_TARGET/include/rte_eal.h"; then
         AC_MSG_ERROR([
 =========================================
 
-Cannot find \$RTE_SDK_BIN/include/rte_eal.h for DPDK.
-Define \$RTE_SDK and \$RTE_TARGET as per DPDK documentation,
-or install DPDK using meson, or the system package manager.
-Note with the system package manager, you need the devel package
-version (dpdk-dev or dpdk-devel).
+Cannot find \$RTE_SDK/\$RTE_TARGET/include/rte_eal.h for Intel DPDK.
+Define \$RTE_SDK and \$RTE_TARGET as per Intel DPDK documentation.
 
 =========================================])
-      fi
+    fi
+    if test ! -f "$RTE_SDK/$RTE_TARGET/lib/librte_eal.a"; then
+        AC_MSG_ERROR([
+=========================================
 
-      AC_MSG_RESULT([yes, found at $RTE_SDK_BIN])
+Cannot find \$RTE_SDK/\$RTE_TARGET/lib/librte_eal.a for Intel DPDK.
+Define \$RTE_SDK and \$RTE_TARGET as per Intel DPDK documentation.
 
-      if test -z "$RTE_TARGET" ; then
-            AC_MSG_ERROR([
-You must define \$RTE_TARGET when building DPDK with make.
-                          ])
-      fi
+=========================================])
+    fi
+    rte_ver_major=`grep "#define RTE_VER_MAJOR" "$RTE_SDK/$RTE_TARGET/include/rte_version.h" | head -n 1 | awk '{print $3}'`
+    rte_ver_minor=`grep "#define RTE_VER_MINOR" "$RTE_SDK/$RTE_TARGET/include/rte_version.h" | head -n 1 | awk '{print $3}'`
+    rte_ver_year=`grep "#define RTE_VER_YEAR" "$RTE_SDK/$RTE_TARGET/include/rte_version.h" | head -n 1 | awk '{print $3}'`
+    rte_ver_month=`grep "#define RTE_VER_MONTH" "$RTE_SDK/$RTE_TARGET/include/rte_version.h" | head -n 1 | awk '{print $3}'`
+    dpdk_includes="-I$RTE_SDK/$RTE_TARGET/include"
 
-      if test -e "$RTE_SRCDIR/VERSION"; then
-        rte_ver_year=`cat $RTE_SRCDIR/VERSION | sed -e 's/-rc/.-rc./' -e 's/$/..99/' | awk -F '.' '{print int($1)}'`
-        rte_ver_month=`cat $RTE_SRCDIR/VERSION | sed -e 's/-rc/.-rc./' -e 's/$/..99/' | awk -F '.' '{print int($2)}'`
-        rte_ver_minor=`cat $RTE_SRCDIR/VERSION | sed -e 's/-rc/.-rc./' -e 's/$/..99/' | awk -F '.' '{print int($3)}'`
-        rte_ver_major=$rte_ver_year
-      else
-        if grep "#define RTE_VER_MAJOR" "$RTE_SDK_BIN/include/rte_config.h" &> /dev/null; then
-            verfile=rte_config
-        else
-            verfile=rte_version
-        fi
-        rte_ver_year=`grep "#define RTE_VER_YEAR" "$RTE_SDK_BIN/include/$verfile.h" | head -n 1 | awk '{print $3}'`
-        rte_ver_month=`grep "#define RTE_VER_MONTH" "$RTE_SDK_BIN/include/$verfile.h" | head -n 1 | awk '{print $3}'`
-        rte_ver_minor=`grep "#define RTE_VER_MINOR" "$RTE_SDK_BIN/include/$verfile.h" | head -n 1 | awk '{print $3}'`
-        rte_ver_major=`grep "#define RTE_VER_MAJOR" "$RTE_SDK_BIN/include/$verfile.h" | head -n 1 | awk '{print $3}'`
-      fi
-      dpdk_vars=`cd userlevel/dpdk/ && make -s RTE_SDK=$RTE_SDK RTE_TARGET=$RTE_TARGET RTE_VER_YEAR=$rte_ver_year RTE_VER_MONTH=$rte_ver_month RTE_VER_MAJOR=$rte_ver_major RTE_VER_MINOR=$rte_ver_minor`
-      eval $dpdk_vars
+    if test "x$rte_ver_major" = x; then
+        rte_ver_major=0
     fi
 
     AC_SUBST(RTE_SDK)
     AC_SUBST(RTE_TARGET)
-    AC_SUBST(RTE_SDK_BIN)
-    AC_SUBST(RTE_VER_YEAR,  $rte_ver_year)
-    AC_SUBST(RTE_VER_MONTH, $rte_ver_month)
     AC_SUBST(RTE_VER_MAJOR, $rte_ver_major)
     AC_SUBST(RTE_VER_MINOR, $rte_ver_minor)
-    AC_SUBST(DPDK_INCLUDES, -I${RTE_INCLUDE})
-    AC_SUBST(DPDK_LIBS, ${DPDK_LIBS})
-    AC_SUBST(DPDK_CFLAGS, ${DPDK_CFLAGS})
-
+    AC_SUBST(RTE_VER_YEAR, $rte_ver_year)
+    AC_SUBST(RTE_VER_MONTH, $rte_ver_month)
     AC_DEFINE([HAVE_DPDK])
     AC_SUBST(USE_DPDK, yes)
+	AC_SUBST(DPDK_INCLUDES, $dpdk_includes)
+fi
+
+AC_ARG_ENABLE([openssl],
+    [AS_HELP_STRING([  --enable-openssl], [use OpenSSL])],
+    [:], [enable_openssl=no])
+
+if test "x$enable_openssl" = xyes; then
+    if test "x$enable_userlevel" != xyes; then
+        AC_MSG_ERROR([
+=========================================
+
+--enable-openssl requires --enable-userlevel which was not provided.
+
+=========================================])
+    fi
+
+    AX_CHECK_OPENSSL([AC_SUBST(USE_OPENSSL, yes)], [AC_SUBST(USE_OPENSSL, no)])
+
+    if test "x$USE_OPENSSL" = xno; then
+        AC_MSG_ERROR([
+=========================================
+
+Cannot find OpenSSL library (cannot compile with --enable-openssl).
+
+=========================================])
+    fi
+
+    AC_DEFINE([HAVE_OPENSSL])
+fi
+
+
+dnl
+dnl hugepages
+dnl
+AC_ARG_ENABLE([hugepages],
+     [AS_HELP_STRING([  --enable-hugepages], [use HugePages])],
+    [:], [enable_hugepages=no])
+
+if test "x$enable_hugepages" = xyes; then
+    if test "x$enable_userlevel" != xyes; then
+AC_MSG_ERROR([
+=========================================
+
+--enable-hugepages requires --enable-userlevel which was not provided.
+
+=========================================])
+   fi
+
+   AC_CHECK_LIB(hugetlbfs, get_huge_pages, [AC_SUBST(USE_HUGEPAGES, yes)], [AC_SUBST(USE_HUGEPAGES, no)])
+
+    if test "x$USE_HUGEPAGES" = xno; then
+        AC_MSG_ERROR([
+=========================================
+
+Cannot find libhugetlbfs library for huge page support (cannot compile with --enable-hugepages). Try installing libhugetlbfs-dev
+
+=========================================])
+    else
+	AC_SUBST(HUGEPAGES_LIBS, "-lhugetlbfs")
+	AC_DEFINE([HAVE_HUGEPAGES])
+    fi
+
 
 fi
+
+
+dnl
+dnl batch
+dnl
+AC_ARG_ENABLE([batch],
+     [AS_HELP_STRING([  --enable-batch], [use Batch])],
+    [:], [enable_batch=no])
+
+if test "x$enable_batch" = xyes; then
+    if test "x$enable_userlevel" != xyes; then
+AC_MSG_ERROR([
+=========================================
+
+--enable-batch requires --enable-userlevel which was not provided.
+
+=========================================])
+   fi
+   
+   AC_DEFINE([HAVE_BATCH],[1])
+
+fi
+
 
 dnl linuxmodule driver and features
 
@@ -537,7 +564,7 @@ dnl
 
 AC_ARG_ENABLE([all-elements], [AS_HELP_STRING([--enable-all-elements], [include all provided element groups])])
 
-dnl ELEMENTS_ARG_ENABLE(COLLECTION, HELP-STRING, DEFAULT-VALUE, IF_YES)
+dnl ELEMENTS_ARG_ENABLE(COLLECTION, HELP-STRING, DEFAULT-VALUE)
 element_groups=""
 AC_SUBST(element_groups)
 AC_DEFUN([ELEMENTS_ARG_ENABLE],
@@ -565,6 +592,7 @@ ELEMENTS_ARG_ENABLE(radio, [include radio elements], NO)
 ELEMENTS_ARG_ENABLE(simple, [include simple versions of other elements], yes)
 dnl ELEMENTS_ARG_ENABLE(snmp, [include SNMP elements], NO)
 ELEMENTS_ARG_ENABLE(standard, [include standard elements], yes)
+ELEMENTS_ARG_ENABLE(tcp, [include TCP elements], yes)
 ELEMENTS_ARG_ENABLE(tcpudp, [include TCP and UDP elements], yes)
 ELEMENTS_ARG_ENABLE(test, [include regression test elements], yes)
 ELEMENTS_ARG_ENABLE(threads, [include thread management elements], yes)
@@ -572,14 +600,11 @@ ELEMENTS_ARG_ENABLE(wifi, [include wifi elements and support], NO)
 AC_ARG_ENABLE(experimental, [AS_HELP_STRING([--enable-experimental], [enable experimental elements in normal groups])], :, enable_experimental=no)
 AC_ARG_ENABLE(skip-elements, [AS_HELP_STRING([--enable-skip-elements=ELTS], [disable comma-separated elements])], :, enable_skip_elements=no)
 
-all_element_groups=
-for i in `(cd $srcdir/elements; ls | sed '/^CVS$/d;/^\.git/d;/^bsdmodule$/d;/^linuxmodule$/d;/^ns$/d;/^userlevel$/d;/^minios$/d')`; do
+for i in `(cd $srcdir/elements; ls | sed '/^CVS$/d;/^bsdmodule$/d;/^linuxmodule$/d;/^ns$/d;/^userlevel$/d;/^minios$/d')`; do
     enableval=`eval 'echo $'"enable_$i"`
     test "x$enable_all_elements" = xyes -a "x$enableval" '!=' xno && enableval=yes
     test -d "$srcdir/elements/$i" -a "$enableval" = "yes" && element_groups="$element_groups $i"
-    test -d "$srcdir/elements/$i" && all_element_groups="$all_element_groups$i "
 done
-AC_SUBST([all_element_groups])
 
 FINDELEMFLAGS=
 if test "x$enable_skip_elements" != xno -a "x$enable_skip_elements" != xyes; then
@@ -587,6 +612,22 @@ if test "x$enable_skip_elements" != xno -a "x$enable_skip_elements" != xyes; the
 fi
 AC_SUBST([FINDELEMFLAGS])
 
+dnl
+dnl boost
+dnl
+if test "x$enable_tcp" = xyes; then
+    AX_BOOST_BASE([1.51], [AC_SUBST(USE_BOOST, yes)], [AC_SUBST(USE_BOOST, no)])
+
+    if test "x$USE_BOOST" = xyes; then
+        AX_BOOST_CONTEXT
+        if test "x$BOOST_CONTEXT_LIB" = x; then
+            USE_BOOST=no
+            AC_MSG_WARN([Boost::Context not found, using slower makecontext()/swapcontext()])
+        fi
+    else
+        AC_MSG_WARN([Boost not found, using slower makecontext()/swapcontext()])
+    fi
+fi
 
 dnl
 dnl How to build bsdmodule driver?
@@ -714,7 +755,7 @@ fi
 CLICK_CHECK_POSIX_CLOCKS
 
 AC_ARG_ENABLE([nanotimestamp],
-    [AS_HELP_STRING([--enable-nanotimestamp], [enable nanosecond timestamps (default if clock_gettime is available)])])
+    [AS_HELP_STRING([--enable-nanotimestamp], [enable nanosecond timestamps])])
 # Default to nanosecond-precision timestamps if clock_gettime is available.
 if test "x$enable_nanotimestamp" = x -a "x$have_clock_gettime" = xyes; then
     enable_nanotimestamp=yes
@@ -775,6 +816,7 @@ dnl
 
 AC_CHECK_HEADERS_ONCE([termio.h netdb.h sys/event.h pwd.h grp.h execinfo.h])
 CLICK_CHECK_POLL_H
+CLICK_CHECK_EPOLL_H
 AC_CHECK_FUNCS([pselect sigaction])
 
 AC_CHECK_FUNCS([kqueue], [have_kqueue=yes])
@@ -1571,8 +1613,8 @@ Your Linux kernel header files cause errors when included by a C++ program.
 
 Click modifies the Linux kernel's header files to make them work with
 C++, using the program 'linuxmodule/click-linuxtool.pl'. It looks like
-your kernel header files have features that tool doesn't know how to fix.
-You can report this error to us on the Click mailing list, or, even better,
+your kernel header files have features the tool doesn't know how to fix.
+You can report this error to us via a Github issue, or, even better,
 try to fix the error. See the config.log file for more information on the
 error.
 

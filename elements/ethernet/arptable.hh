@@ -236,15 +236,17 @@ ARPTable::lookup(IPAddress ip, EtherAddress *eth, uint32_t poll_timeout_j)
     _lock.acquire_read();
     int r = -1;
     if (Table::iterator it = _table.find(ip)) {
-	click_jiffies_t now = click_jiffies();
+	click_jiffies_t now = 0;
+	if ((_timeout_j > 0) || (poll_timeout_j > 0))
+		now = click_jiffies();
 	if (it->known(now, _timeout_j)) {
-	    *eth = it->_eth;
-	    if (poll_timeout_j
-		&& !click_jiffies_less(now, it->_live_at_j + poll_timeout_j)
-		&& it->allow_poll(now)) {
-		it->mark_poll(now);
-		r = 1;
-	    } else
+		*eth = it->_eth;
+		if (poll_timeout_j
+			&& !click_jiffies_less(now, it->_live_at_j + poll_timeout_j)
+			&& it->allow_poll(now)) {
+			it->mark_poll(now);
+			r = 1;
+	} else
 		r = 0;
 	}
     }

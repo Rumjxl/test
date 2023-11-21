@@ -157,13 +157,6 @@ class Lexer { public:
 #endif
 	String name;
 	int next;
-
-        inline Compound* compound() const {
-            if (factory == compound_element_factory)
-                return reinterpret_cast<Compound*>(thunk);
-            else
-                return 0;
-        }
     };
     HashTable<String, int> _element_type_map;
     Vector<ElementType> _element_types;
@@ -202,7 +195,6 @@ class Lexer { public:
     int make_compound_element(int);
     void expand_compound_element(int, VariableEnvironment &);
     void add_router_connections(int, const Vector<int> &);
-    static Element* compound_element_factory(uintptr_t);
 
     void yport(bool isoutput);
     void yelement_name();

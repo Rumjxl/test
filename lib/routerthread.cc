@@ -631,6 +631,19 @@ RouterThread::driver()
             timer_set().run_timers(this, _master);
         } while (0);
 
+        // run TCP timers
+        do {
+#if !BSD_NETISRSCHED
+            if (iter % tcp_timer_set().timer_stride())
+                break;
+#elif BSD_NETISRSCHED
+            if (iter % tcp_timer_set().timer_stride() && _oticks == ticks)
+                break;
+            _oticks = ticks;
+#endif
+            tcp_timer_set().run_timers(this, _master);
+        } while (0);
+
         // run operating system
         do {
 #if !HAVE_ADAPTIVE_SCHEDULER && !BSD_NETISRSCHED

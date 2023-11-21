@@ -15,7 +15,13 @@
 #if CLICK_NS
 # include <click/simclick.h>
 #endif
-#if (CLICK_USERLEVEL || CLICK_NS || CLICK_MINIOS) && (!HAVE_MULTITHREAD || HAVE___THREAD_STORAGE_CLASS)
+#if CLICK_USERLEVEL && HAVE_DPDK
+# include <click/vector.hh>
+# include <rte_mbuf.h>
+# include <rte_memcpy.h>
+# include <rte_ip.h>
+# define HAVE_DPDK_PACKET 1
+#elif (CLICK_USERLEVEL || CLICK_NS || CLICK_MINIOS) && (!HAVE_MULTITHREAD || HAVE___THREAD_STORAGE_CLASS)
 # define HAVE_CLICK_PACKET_POOL 1
 #endif
 #ifndef CLICK_PACKET_DEPRECATED_ENUM
@@ -41,6 +47,8 @@ class Packet { public:
     enum {
 #ifdef CLICK_MINIOS
 	default_headroom = 48,		///< Increase headroom for improved performance.
+#elif HAVE_DPDK_PACKET
+	default_headroom = RTE_PKTMBUF_HEADROOM,
 #else
 	default_headroom = 28,		///< Default packet headroom() for
 					///  Packet::make().  4-byte aligned.
@@ -50,7 +58,7 @@ class Packet { public:
     };
 
     static WritablePacket *make(uint32_t headroom, const void *data,
-				uint32_t length, uint32_t tailroom) CLICK_WARN_UNUSED_RESULT;
+				uint32_t length, uint32_t tailroom, bool clear_annotations = true) CLICK_WARN_UNUSED_RESULT;
     static inline WritablePacket *make(const void *data, uint32_t length) CLICK_WARN_UNUSED_RESULT;
     static inline WritablePacket *make(uint32_t length) CLICK_WARN_UNUSED_RESULT;
 #if CLICK_LINUXMODULE
@@ -66,8 +74,14 @@ class Packet { public:
     static WritablePacket* make(unsigned char* data, uint32_t length,
 				buffer_destructor_type buffer_destructor,
                                 void* argument = (void*) 0, int headroom = 0, int tailroom = 0) CLICK_WARN_UNUSED_RESULT;
-#endif
+#if HAVE_DPDK_PACKET
+	static inline WritablePacket *make(struct rte_mbuf *m, bool clear_annotations = true) CLICK_WARN_UNUSED_RESULT;
 
+	typedef struct rte_mempool * mempoolTable;
+	static mempoolTable* mempool;
+	static void static_initialize();
+#endif /* HAVE_DPDK_PACKET */
+#endif
     static void static_cleanup();
 
     inline void kill();
@@ -85,6 +99,16 @@ class Packet { public:
     inline const unsigned char *end_buffer() const;
     inline uint32_t buffer_length() const;
 
+    inline bool contiguous() const;
+    inline uint16_t segments() const;
+    inline Packet *seg_next() const;
+    inline Packet *seg_last() const;
+    inline void seg_join(Packet *);
+    inline Packet *seg_split();
+    inline uint32_t seg_len() const;
+    inline void seg_take(uint32_t len);
+    inline Packet *seg_pull(uint32_t len);
+
 #if CLICK_LINUXMODULE
     struct sk_buff *skb()		{ return (struct sk_buff *)this; }
     const struct sk_buff *skb() const	{ return (const struct sk_buff*)this; }
@@ -94,6 +118,48 @@ class Packet { public:
     struct mbuf *steal_m();
     struct mbuf *dup_jumbo_m(struct mbuf *mbuf);
 #elif CLICK_USERLEVEL || CLICK_MINIOS
+#if HAVE_DPDK_PACKET
+
+    static WritablePacket * mbuf2packet(struct rte_mbuf *m);
+    struct rte_mbuf * packet2mbuf(bool tx_ip_checksum, bool tx_tcp_checksum, bool tx_udp_checksum, bool tx_tcp_tso);
+    void destroy(unsigned char *, size_t, void *buf);       
+    struct rte_mbuf *mbuf() { return (struct rte_mbuf *)this; }
+    const struct rte_mbuf *mbuf() const { return (const struct rte_mbuf*)this; }
+
+    void reset() {
+	assert(!shared());
+	if (segments() > 1) {
+		Packet *p = seg_split();
+		p->kill();
+	}
+	rte_pktmbuf_reset(mbuf());
+	clear_annotations();
+    }
+
+    buffer_destructor_type buffer_destructor() const {
+	assert(0);
+	return NULL;
+    }
+
+    void set_buffer_destructor(buffer_destructor_type) {
+	assert(0);
+    }
+
+    void* destructor_argument() {
+	assert(0);
+    }
+
+    void reset_buffer() {
+	assert(0);
+    }
+
+#else
+    void reset() {
+	assert(!shared());
+	_data = _tail = _head + default_headroom;
+	clear_annotations();
+    }
+
     buffer_destructor_type buffer_destructor() const {
 	return _destructor;
     }
@@ -111,6 +177,7 @@ class Packet { public:
 	_head = _data = _tail = _end = 0;
 	_destructor = 0;
     }
+#endif /* HAVE_DPDK_PACKET */
 #endif
 
 
@@ -270,8 +337,8 @@ class Packet { public:
 #if CLICK_USERLEVEL || CLICK_MINIOS
     inline void shrink_data(const unsigned char *data, uint32_t length);
     inline void change_headroom_and_length(uint32_t headroom, uint32_t length);
+    bool copy(Packet* p, int headroom=0); 
 #endif
-    bool copy(Packet* p, int headroom=0);
     //@}
 
     /** @name Header Pointers */
@@ -336,6 +403,9 @@ class Packet { public:
 #if CLICK_LINUXMODULE
     const Anno *xanno() const		{ return (const Anno *)skb()->cb; }
     Anno *xanno()			{ return (Anno *)skb()->cb; }
+#elif HAVE_DPDK_PACKET
+	const Anno *xanno() const       { return (const Anno *)(mbuf() + 1); }
+	Anno *xanno()           { return (Anno *)(mbuf() + 1); }
 #else
     const Anno *xanno() const		{ return &_aa.cb; }
     Anno *xanno()			{ return &_aa.cb; }
@@ -640,7 +710,12 @@ class Packet { public:
 	*reinterpret_cast<click_aliasable_void_pointer_t *>(xanno()->c + i) = const_cast<void *>(x);
     }
 
-#if !CLICK_LINUXMODULE
+#if HAVE_DPDK_PACKET
+    inline Packet* data_packet() {
+		assert(0);
+        return NULL;
+    }
+#elif !CLICK_LINUXMODULE
     inline Packet* data_packet() {
         return _data_packet;
     }
@@ -725,14 +800,23 @@ class Packet { public:
 	unsigned char *nh;
 	unsigned char *h;
 	PacketType pkt_type;
-	char timestamp[sizeof(Timestamp)];
+	Timestamp timestamp;
 	Packet *next;
 	Packet *prev;
+	AllAnno()
+	    : timestamp(Timestamp::uninitialized_t()) {
+	}
     };
+
+# if HAVE_DPDK_PACKET
+	const AllAnno *aanno() const { return (AllAnno *)(mbuf() + 1); }
+	AllAnno *aanno() { return (AllAnno *)(mbuf() + 1); }
+# endif /* HAVE_DPDK_PACKET */
+
 #endif
     /** @endcond never */
 
-#if !CLICK_LINUXMODULE
+#if !CLICK_LINUXMODULE && !HAVE_DPDK_PACKET
     // User-space and BSD kernel module implementations.
     atomic_uint32_t _use_count;
     Packet *_data_packet;
@@ -797,6 +881,11 @@ class WritablePacket : public Packet { public:
     inline click_tcp *tcp_header() const;
     inline click_udp *udp_header() const;
 
+    inline WritablePacket *seg_next() const;
+    inline WritablePacket *seg_last() const;
+    inline WritablePacket *seg_split();
+    inline WritablePacket *seg_pull(uint32_t len);
+
     /** @cond never */
     inline unsigned char *buffer_data() const CLICK_DEPRECATED;
     /** @endcond never */
@@ -804,7 +893,7 @@ class WritablePacket : public Packet { public:
  private:
 
     inline WritablePacket() { }
-#if !CLICK_LINUXMODULE
+#if !CLICK_LINUXMODULE && !HAVE_DPDK_PACKET
     inline void initialize();
 #endif
     WritablePacket(const Packet &x);
@@ -851,6 +940,8 @@ Packet::clear_annotations(bool all)
 	set_next(0);
 	set_prev(0);
     }
+#elif HAVE_DPDK_PACKET
+	memset(aanno(), 0, all ? sizeof(AllAnno) : sizeof(Anno));
 #else
     memset(&_aa, 0, all ? sizeof(AllAnno) : sizeof(Anno));
 #endif
@@ -874,7 +965,7 @@ Packet::copy_annotations(const Packet *p)
 }
 
 
-#if !CLICK_LINUXMODULE
+#if !CLICK_LINUXMODULE && !HAVE_DPDK_PACKET
 inline void
 WritablePacket::initialize()
 {
@@ -897,6 +988,8 @@ Packet::data() const
 {
 #if CLICK_LINUXMODULE
     return skb()->data;
+#elif HAVE_DPDK_PACKET
+    return rte_pktmbuf_mtod(mbuf(), const unsigned char *);
 #else
     return _data;
 #endif
@@ -915,6 +1008,8 @@ Packet::end_data() const
 # else
     return skb()->tail;
 # endif
+#elif HAVE_DPDK_PACKET
+    return data() + mbuf()->data_len;
 #else
     return _tail;
 #endif
@@ -929,6 +1024,9 @@ Packet::buffer() const
 {
 #if CLICK_LINUXMODULE
     return skb()->head;
+#elif HAVE_DPDK_PACKET
+	const struct rte_mbuf *m = mbuf();
+	return (const unsigned char *)m->buf_addr;
 #else
     return _head;
 #endif
@@ -947,6 +1045,9 @@ Packet::end_buffer() const
 # else
     return skb()->end;
 # endif
+#elif HAVE_DPDK_PACKET
+    const struct rte_mbuf *m = mbuf();
+    return buffer() + m->buf_len;
 #else
     return _end;
 #endif
@@ -958,6 +1059,8 @@ Packet::length() const
 {
 #if CLICK_LINUXMODULE
     return skb()->len;
+#elif HAVE_DPDK_PACKET
+    return rte_pktmbuf_pkt_len(mbuf());
 #else
     return _tail - _data;
 #endif
@@ -971,7 +1074,11 @@ Packet::length() const
 inline uint32_t
 Packet::headroom() const
 {
+#if HAVE_DPDK_PACKET
+    return rte_pktmbuf_headroom(mbuf());
+#else
     return data() - buffer();
+#endif
 }
 
 /** @brief Return the packet's tailroom.
@@ -982,7 +1089,11 @@ Packet::headroom() const
 inline uint32_t
 Packet::tailroom() const
 {
+#if HAVE_DPDK_PACKET
+    return rte_pktmbuf_tailroom(mbuf());
+#else
     return end_buffer() - end_data();
+#endif
 }
 
 /** @brief Return the packet's buffer length.
@@ -991,7 +1102,11 @@ Packet::tailroom() const
 inline uint32_t
 Packet::buffer_length() const
 {
+#if HAVE_DPDK_PACKET
+    return mbuf()->buf_len;
+#else
     return end_buffer() - buffer();
+#endif
 }
 
 inline Packet *
@@ -999,6 +1114,8 @@ Packet::next() const
 {
 #if CLICK_LINUXMODULE
     return (Packet *)(skb()->next);
+#elif HAVE_DPDK_PACKET
+    return aanno()->next;
 #else
     return _aa.next;
 #endif
@@ -1009,6 +1126,8 @@ Packet::next()
 {
 #if CLICK_LINUXMODULE
     return (Packet *&)(skb()->next);
+#elif HAVE_DPDK_PACKET
+    return aanno()->next;
 #else
     return _aa.next;
 #endif
@@ -1019,6 +1138,8 @@ Packet::set_next(Packet *p)
 {
 #if CLICK_LINUXMODULE
     skb()->next = p->skb();
+#elif HAVE_DPDK_PACKET
+    aanno()->next = p;
 #else
     _aa.next = p;
 #endif
@@ -1029,6 +1150,8 @@ Packet::prev() const
 {
 #if CLICK_LINUXMODULE
     return (Packet *)(skb()->prev);
+#elif HAVE_DPDK_PACKET
+    return aanno()->prev;
 #else
     return _aa.prev;
 #endif
@@ -1039,6 +1162,8 @@ Packet::prev()
 {
 #if CLICK_LINUXMODULE
     return (Packet *&)(skb()->prev);
+#elif HAVE_DPDK_PACKET
+    return aanno()->prev;
 #else
     return _aa.prev;
 #endif
@@ -1049,10 +1174,200 @@ Packet::set_prev(Packet *p)
 {
 #if CLICK_LINUXMODULE
     skb()->prev = p->skb();
+#elif HAVE_DPDK_PACKET
+	aanno()->prev = p;
 #else
     _aa.prev = p;
 #endif
 }
+
+inline bool
+Packet::contiguous() const
+{
+#if HAVE_DPDK_PACKET
+    return rte_pktmbuf_is_contiguous(mbuf());
+#else
+	return true;
+#endif
+}
+
+inline uint16_t
+Packet::segments() const
+{
+#if HAVE_DPDK_PACKET
+    return mbuf()->nb_segs;
+#else
+    return 1;
+#endif
+}
+
+inline Packet *
+Packet::seg_next() const
+{
+#if HAVE_DPDK_PACKET
+    return reinterpret_cast<Packet *>(mbuf()->next);
+#else
+    return NULL;
+#endif
+}
+
+inline Packet *
+Packet::seg_last() const
+{
+#if HAVE_DPDK_PACKET
+    struct rte_mbuf *m = const_cast<struct rte_mbuf *>(mbuf());
+    return reinterpret_cast<Packet *>(rte_pktmbuf_lastseg(m));
+#else
+    return const_cast<Packet*>(this);
+#endif
+}
+
+inline void
+Packet::seg_join(Packet *p)
+{
+#if HAVE_DPDK_PACKET
+    int r = rte_pktmbuf_chain(mbuf(), p->mbuf());
+    assert(r == 0);
+#else
+	(void)p;
+    assert(0);
+#endif
+}
+
+/** @brief Split the segment chain.
+  * @return the next segment, or null if there are no more segments */
+inline Packet *
+Packet::seg_split()
+{
+#if HAVE_DPDK_PACKET
+    struct rte_mbuf *m = mbuf();
+    struct rte_mbuf *n = m->next;
+    if (n) {
+	n->pkt_len = m->pkt_len - m->data_len;
+	n->nb_segs = m->nb_segs - 1;
+    }
+
+    m->next = NULL;
+    m->pkt_len = m->data_len;
+    m->nb_segs = 1;
+    return reinterpret_cast<Packet *>(n);
+#else
+    return NULL;
+#endif
+}
+
+inline uint32_t
+Packet::seg_len() const
+{
+#if HAVE_DPDK_PACKET
+    return mbuf()->data_len;
+#else
+    return length();
+#endif
+}
+
+inline void
+Packet::seg_take(uint32_t len)
+{
+#if HAVE_DPDK_PACKET
+    if (len > length()) {
+	click_chatter("Packet::seg_take %d > length %d\n", len, length());
+	len = length();
+    }
+
+    // New packet length
+    int new_len = length() - len;
+
+    // Number of segments and packet length
+    int nb_segs = 0;
+    int pkt_len = 0;
+
+    // Go over each mbuf and find where to break the chain
+    for (struct rte_mbuf *m = mbuf(); m; m = m->next) {
+	nb_segs += 1;
+	pkt_len += m->data_len;
+
+	if (pkt_len >= new_len) {
+	    struct rte_mbuf *n = m->next;
+	    if (n) {
+		n->pkt_len = length() - pkt_len;
+		n->nb_segs = segments() - nb_segs;
+		rte_pktmbuf_free(n);
+	    }
+
+	    m->next = NULL;
+	    m->data_len = new_len - (pkt_len - m->data_len);
+	    break;
+	}
+    }
+
+    struct rte_mbuf *m = mbuf();
+    m->nb_segs = nb_segs;
+    m->pkt_len = new_len;
+#else
+    take(len);
+#endif
+}
+
+
+inline Packet *
+Packet::seg_pull(uint32_t len)
+{
+#if HAVE_DPDK_PACKET
+    if (len > length()) {
+	click_chatter("Packet::seg_pull %d > length %d\n", len, length());
+	len = length();
+    }
+
+
+    struct rte_mbuf *m = mbuf();
+    int nb_segs = m->nb_segs;
+    int pkt_len = m->pkt_len;
+
+    while (len > 0 && nb_segs > 1) {
+
+	if (len < m->data_len)
+	    break;
+
+	len -= m->data_len;
+
+	nb_segs -= 1;
+	pkt_len -= m->data_len;
+
+	struct rte_mbuf *n = m->next;
+	if (n) {
+	    n->pkt_len = pkt_len;
+	    n->nb_segs = nb_segs;
+
+	    m->next = NULL;
+	    m->nb_segs = 1;
+	    m->pkt_len = m->data_len;
+
+	    // Do not kill first packet yet, since it has annotations
+	    if (m != mbuf())
+		rte_pktmbuf_free(m);
+	}
+
+	m = n;
+    }
+
+    m->data_off += len;
+    m->data_len -= len;
+    m->pkt_len  -= len;
+
+    if (m != mbuf()) {
+	Packet *p = reinterpret_cast<Packet *>(m);
+	rte_memcpy(p->aanno(), this->aanno(), sizeof(AllAnno));
+	rte_pktmbuf_free(mbuf());
+    }
+
+    return reinterpret_cast<Packet *>(m);
+#else
+    pull(len);
+    return this;
+#endif
+}
+
 
 /** @brief Return true iff the packet's MAC header pointer is set.
  * @sa set_mac_header, clear_mac_header */
@@ -1065,6 +1380,8 @@ Packet::has_mac_header() const
 # else
     return skb()->mac.raw != 0;
 # endif
+#elif HAVE_DPDK_PACKET
+	return aanno()->mac != 0;
 #else
     return _aa.mac != 0;
 #endif
@@ -1083,6 +1400,8 @@ Packet::mac_header() const
 # else
     return skb()->mac.raw;
 # endif
+#elif HAVE_DPDK_PACKET
+	return aanno()->mac;
 #else
     return _aa.mac;
 #endif
@@ -1103,6 +1422,8 @@ Packet::has_network_header() const
 # else
     return skb()->nh.raw != 0;
 # endif
+#elif HAVE_DPDK_PACKET
+	return aanno()->nh != 0;
 #else
     return _aa.nh != 0;
 #endif
@@ -1121,6 +1442,8 @@ Packet::network_header() const
 # else
     return skb()->nh.raw;
 # endif
+#elif HAVE_DPDK_PACKET
+	return aanno()->nh;
 #else
     return _aa.nh;
 #endif
@@ -1141,6 +1464,8 @@ Packet::has_transport_header() const
 # else
     return skb()->h.raw != 0;
 # endif
+#elif HAVE_DPDK_PACKET
+	return aanno()->h != 0;
 #else
     return _aa.h != 0;
 #endif
@@ -1159,6 +1484,8 @@ Packet::transport_header() const
 # else
     return skb()->h.raw;
 # endif
+#elif HAVE_DPDK_PACKET
+	return aanno()->h;
 #else
     return _aa.h;
 #endif
@@ -1251,31 +1578,35 @@ Packet::transport_length() const
     return end_data() - transport_header();
 }
 
-inline const Timestamp&
+inline const Timestamp &
 Packet::timestamp_anno() const
 {
 #if CLICK_LINUXMODULE
 # if LINUX_VERSION_CODE <= KERNEL_VERSION(2, 6, 13)
-    return *reinterpret_cast<const Timestamp*>(&skb()->stamp);
+    return *reinterpret_cast<const Timestamp *>(&skb()->stamp);
 # else
-    return *reinterpret_cast<const Timestamp*>(&skb()->tstamp);
+    return *reinterpret_cast<const Timestamp *>(&skb()->tstamp);
 # endif
+#elif HAVE_DPDK_PACKET
+	return aanno()->timestamp;
 #else
-    return *reinterpret_cast<const Timestamp*>(&_aa.timestamp);
+    return _aa.timestamp;
 #endif
 }
 
-inline Timestamp&
+inline Timestamp &
 Packet::timestamp_anno()
 {
 #if CLICK_LINUXMODULE
 # if LINUX_VERSION_CODE <= KERNEL_VERSION(2, 6, 13)
-    return *reinterpret_cast<Timestamp*>(&skb()->stamp);
+    return *reinterpret_cast<Timestamp *>(&skb()->stamp);
 # else
-    return *reinterpret_cast<Timestamp*>(&skb()->tstamp);
+    return *reinterpret_cast<Timestamp *>(&skb()->tstamp);
 # endif
+#elif HAVE_DPDK_PACKET
+	return aanno()->timestamp;
 #else
-    return *reinterpret_cast<Timestamp*>(&_aa.timestamp);
+    return _aa.timestamp;
 #endif
 }
 
@@ -1320,6 +1651,8 @@ Packet::packet_type_anno() const
     return (PacketType)(skb()->pkt_type & PACKET_TYPE_MASK);
 #elif CLICK_LINUXMODULE
     return (PacketType)(skb()->pkt_type);
+#elif HAVE_DPDK_PACKET
+	return aanno()->pkt_type;
 #else
     return _aa.pkt_type;
 #endif
@@ -1332,6 +1665,8 @@ Packet::set_packet_type_anno(PacketType p)
     skb()->pkt_type = (skb()->pkt_type & PACKET_CLEAN) | p;
 #elif CLICK_LINUXMODULE
     skb()->pkt_type = p;
+#elif HAVE_DPDK_PACKET
+	aanno()->pkt_type = p;
 #else
     _aa.pkt_type = p;
 #endif
@@ -1429,6 +1764,9 @@ Packet::kill()
     b->list = 0;
 # endif
     skbmgr_recycle_skbs(b);
+#elif HAVE_DPDK_PACKET
+    clear_annotations();
+    rte_pktmbuf_free(mbuf());
 #elif HAVE_CLICK_PACKET_POOL
     if (_use_count.dec_and_test())
 	WritablePacket::recycle(static_cast<WritablePacket *>(this));
@@ -1519,6 +1857,17 @@ Packet::make(struct mbuf *m)
 }
 #endif
 
+#if HAVE_DPDK_PACKET
+WritablePacket *
+Packet::make(struct rte_mbuf *mbuf, bool clear_annotations)
+{
+    WritablePacket *p = reinterpret_cast<WritablePacket *>(mbuf);
+    if (clear_annotations)
+	p->clear_annotations();
+    return p;
+}
+#endif
+
 /** @brief Test whether this packet's data is shared.
  *
  * Returns true iff the packet's data is shared.  If shared() is false, then
@@ -1528,6 +1877,14 @@ Packet::shared() const
 {
 #if CLICK_LINUXMODULE
     return skb_cloned(const_cast<struct sk_buff *>(skb()));
+#elif HAVE_DPDK_PACKET
+    const struct rte_mbuf *m = mbuf();
+    while (m) {
+	if (RTE_MBUF_INDIRECT(m) || rte_mbuf_refcnt_read(m) > 1)
+	    return true;
+	m = m->next;
+    }
+    return false;
 #else
     return (_data_packet || _use_count > 1);
 #endif
@@ -1572,6 +1929,8 @@ Packet::push(uint32_t len)
 	WritablePacket *q = (WritablePacket *)this;
 #if CLICK_LINUXMODULE	/* Linux kernel module */
 	__skb_push(q->skb(), len);
+#elif HAVE_DPDK_PACKET
+	rte_pktmbuf_prepend(q->mbuf(), len);
 #else				/* User-space and BSD kernel module */
 	q->_data -= len;
 # if CLICK_BSDMODULE
@@ -1591,6 +1950,8 @@ Packet::nonunique_push(uint32_t len)
     if (headroom() >= len) {
 #if CLICK_LINUXMODULE	/* Linux kernel module */
 	__skb_push(skb(), len);
+#elif HAVE_DPDK_PACKET
+	rte_pktmbuf_prepend(mbuf(), len);
 #else				/* User-space and BSD kernel module */
 	_data -= len;
 # if CLICK_BSDMODULE
@@ -1613,6 +1974,8 @@ Packet::pull(uint32_t len)
     }
 #if CLICK_LINUXMODULE	/* Linux kernel module */
     __skb_pull(skb(), len);
+#elif HAVE_DPDK_PACKET
+    rte_pktmbuf_adj(mbuf(), len);
 #else				/* User-space and BSD kernel module */
     _data += len;
 # if CLICK_BSDMODULE
@@ -1630,6 +1993,8 @@ Packet::put(uint32_t len)
 	WritablePacket *q = (WritablePacket *)this;
 #if CLICK_LINUXMODULE	/* Linux kernel module */
 	__skb_put(q->skb(), len);
+#elif HAVE_DPDK_PACKET
+	rte_pktmbuf_append(mbuf(), len);
 #else				/* User-space and BSD kernel module */
 	q->_tail += len;
 # if CLICK_BSDMODULE
@@ -1648,6 +2013,8 @@ Packet::nonunique_put(uint32_t len)
     if (tailroom() >= len) {
 #if CLICK_LINUXMODULE	/* Linux kernel module */
 	__skb_put(skb(), len);
+#elif HAVE_DPDK_PACKET
+	rte_pktmbuf_append(mbuf(), len);
 #else				/* User-space and BSD kernel module */
 	_tail += len;
 # if CLICK_BSDMODULE
@@ -1670,6 +2037,8 @@ Packet::take(uint32_t len)
 #if CLICK_LINUXMODULE	/* Linux kernel module */
     skb()->tail -= len;
     skb()->len -= len;
+#elif HAVE_DPDK_PACKET
+    rte_pktmbuf_trim(mbuf(), len);
 #else				/* User-space and BSD kernel module */
     _tail -= len;
 # if CLICK_BSDMODULE
@@ -1708,11 +2077,17 @@ Packet::take(uint32_t len)
 inline void
 Packet::shrink_data(const unsigned char *data, uint32_t length)
 {
+# if HAVE_DPDK_PACKET
+    (void)data;
+    (void)length;
+    assert(0);
+# else
     assert(_data_packet);
     if (data >= _head && data + length >= data && data + length <= _end) {
 	_head = _data = const_cast<unsigned char *>(data);
 	_tail = _end = const_cast<unsigned char *>(data + length);
     }
+# endif /* HAVE_DPDK_PACKET */
 }
 
 /** @brief Shift the packet's data view to a different part of its buffer.
@@ -1736,10 +2111,16 @@ Packet::shrink_data(const unsigned char *data, uint32_t length)
 inline void
 Packet::change_headroom_and_length(uint32_t headroom, uint32_t length)
 {
+# if HAVE_DPDK_PACKET
+    (void)headroom;
+    (void)length;
+    assert(0);
+# else
     if (headroom + length <= buffer_length()) {
 	_data = _head + headroom;
 	_tail = _data + length;
     }
+# endif /* HAVE_DPDK_PACKET */
 }
 #endif
 
@@ -1767,6 +2148,8 @@ Packet::set_mac_header(const unsigned char *p)
 # else
     skb()->mac.raw = const_cast<unsigned char *>(p);
 # endif
+#elif HAVE_DPDK_PACKET
+    aanno()->mac = const_cast<unsigned char *>(p);
 #else				/* User-space and BSD kernel module */
     _aa.mac = const_cast<unsigned char *>(p);
 #endif
@@ -1788,6 +2171,9 @@ Packet::set_mac_header(const unsigned char *p, uint32_t len)
     skb()->mac.raw = const_cast<unsigned char *>(p);
     skb()->nh.raw = const_cast<unsigned char *>(p) + len;
 # endif
+#elif HAVE_DPDK_PACKET
+    aanno()->mac = const_cast<unsigned char *>(p);
+    aanno()->nh = const_cast<unsigned char *>(p) + len;
 #else				/* User-space and BSD kernel module */
     _aa.mac = const_cast<unsigned char *>(p);
     _aa.nh = const_cast<unsigned char *>(p) + len;
@@ -1819,6 +2205,8 @@ Packet::clear_mac_header()
 # else
     skb()->mac.raw = 0;
 # endif
+#elif HAVE_DPDK_PACKET
+    aanno()->mac = 0;
 #else				/* User-space and BSD kernel module */
     _aa.mac = 0;
 #endif
@@ -1832,6 +2220,8 @@ Packet::push_mac_header(uint32_t len)
 	q = (WritablePacket *)this;
 #if CLICK_LINUXMODULE	/* Linux kernel module */
 	__skb_push(q->skb(), len);
+#elif HAVE_DPDK_PACKET
+	rte_pktmbuf_prepend(q->mbuf(), len);
 #else				/* User-space and BSD kernel module */
 	q->_data -= len;
 # if CLICK_BSDMODULE
@@ -1864,6 +2254,9 @@ Packet::set_network_header(const unsigned char *p, uint32_t len)
     skb()->nh.raw = const_cast<unsigned char *>(p);
     skb()->h.raw = const_cast<unsigned char *>(p) + len;
 # endif
+#elif HAVE_DPDK_PACKET
+    aanno()->nh = const_cast<unsigned char *>(p);
+    aanno()->h = const_cast<unsigned char *>(p) + len;
 #else				/* User-space and BSD kernel module */
     _aa.nh = const_cast<unsigned char *>(p);
     _aa.h = const_cast<unsigned char *>(p) + len;
@@ -1886,6 +2279,8 @@ Packet::set_network_header_length(uint32_t len)
 # else
     skb()->h.raw = skb()->nh.raw + len;
 # endif
+#elif HAVE_DPDK_PACKET
+    aanno()->h = aanno()->nh + len;
 #else				/* User-space and BSD kernel module */
     _aa.h = _aa.nh + len;
 #endif
@@ -1940,6 +2335,8 @@ Packet::clear_network_header()
 # else
     skb()->nh.raw = 0;
 # endif
+#elif HAVE_DPDK_PACKET
+   aanno()->nh = 0;
 #else				/* User-space and BSD kernel module */
     _aa.nh = 0;
 #endif
@@ -2056,6 +2453,8 @@ Packet::clear_transport_header()
 # else
     skb()->h.raw = 0;
 # endif
+#elif HAVE_DPDK_PACKET
+    aanno()->h = 0;
 #else				/* User-space and BSD kernel module */
     _aa.h = 0;
 #endif
@@ -2087,6 +2486,11 @@ Packet::shift_header_annotations(const unsigned char *old_head,
     mskb->nh.raw += (mskb->nh.raw ? shift : 0);
     mskb->h.raw += (mskb->h.raw ? shift : 0);
 # endif
+#elif HAVE_DPDK_PACKET
+    ptrdiff_t shift = (buffer() - old_head) + extra_headroom;
+    aanno()->mac += (aanno()->mac ? shift : 0);
+    aanno()->nh += (aanno()->nh ? shift : 0);
+    aanno()->h += (aanno()->h ? shift : 0);
 #else
     ptrdiff_t shift = (_head - old_head) + extra_headroom;
     _aa.mac += (_aa.mac ? shift : 0);
@@ -2103,6 +2507,8 @@ Packet::buffer_data() const
 {
 #if CLICK_LINUXMODULE
     return skb()->head;
+#elif HAVE_DPDK_PACKET
+    return buffer();
 #else
     return _head;
 #endif
@@ -2429,6 +2835,30 @@ WritablePacket::buffer_data() const
     return const_cast<unsigned char *>(Packet::buffer());
 }
 /** @endcond never */
+
+inline WritablePacket *
+WritablePacket::seg_next() const
+{
+    return static_cast<WritablePacket *>(Packet::seg_next());
+}
+
+inline WritablePacket *
+WritablePacket::seg_last() const
+{
+    return static_cast<WritablePacket *>(Packet::seg_last());
+}
+
+inline WritablePacket *
+WritablePacket::seg_split()
+{
+    return static_cast<WritablePacket *>(Packet::seg_split());
+}
+
+inline WritablePacket *
+WritablePacket::seg_pull(uint32_t len)
+{
+    return static_cast<WritablePacket *>(Packet::seg_pull(len));
+}
 
 CLICK_ENDDECLS
 #endif

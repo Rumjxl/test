@@ -119,6 +119,7 @@ class IPPrint : public Element { public:
   int _bytes;			// Number of bytes to dump
   bool _print_id : 1;		// Print IP ID?
   bool _print_timestamp : 1;
+  bool _print_core : 1;
   bool _print_paint : 1;
   bool _print_tos : 1;
   bool _print_ttl : 1;

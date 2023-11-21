@@ -32,7 +32,7 @@ const char *CheckTCPHeader::reason_texts[NREASONS] = {
 };
 
 CheckTCPHeader::CheckTCPHeader()
-  : _reason_drops(0)
+  : _checksum(true), _reason_drops(0)
 {
   _drops = 0;
 }
@@ -51,6 +51,7 @@ CheckTCPHeader::configure(Vector<String> &conf, ErrorHandler *errh)
     if (Args(conf, this, errh)
 	.read("VERBOSE", verbose)
 	.read("DETAILS", details)
+	.read("CHECKSUM", _checksum)
 	.complete() < 0)
 	return -1;
 
@@ -83,7 +84,7 @@ CheckTCPHeader::drop(Reason reason, Packet *p)
 }
 
 Packet *
-CheckTCPHeader::simple_action(Packet *p)
+CheckTCPHeader::smaction(Packet *p)
 {
   const click_ip *iph = p->ip_header();
   const click_tcp *tcph = p->tcp_header();
@@ -99,11 +100,77 @@ CheckTCPHeader::simple_action(Packet *p)
       || p->length() < len + iph_len + p->network_header_offset())
     return drop(BAD_LENGTH, p);
 
-  csum = click_in_cksum((unsigned char *)tcph, len);
-  if (click_in_cksum_pseudohdr(csum, iph, len) != 0)
-    return drop(BAD_CHECKSUM, p);
+  if (_checksum) {
+    csum = click_in_cksum((unsigned char *)tcph, len);
+    if (click_in_cksum_pseudohdr(csum, iph, len) != 0)
+      return drop(BAD_CHECKSUM, p);
+  }
 
   return p;
+}
+
+void
+CheckTCPHeader::push(int, Packet *p)
+{
+    Packet* head = NULL;
+#if HAVE_BATCH
+    Packet* curr = p;
+    Packet* prev = p;
+    Packet* next = NULL;
+    while (curr){
+	next = curr->next();
+	curr->set_next(NULL);
+	
+	Packet* r = smaction(curr);
+	if (r){    
+	    if (head == NULL)
+		head = r;
+	    else
+		prev->set_next(r);
+	    prev = r;
+	}
+
+	curr = next;
+    }
+#else
+    head = smaction(p);
+#endif //HAVE_BATCH
+    if (head)
+	output(0).push(head);
+}
+
+Packet *
+CheckTCPHeader::pull(int)
+{
+    //TODO Test
+    Packet* p = input(0).pull();
+    Packet* head = NULL;
+#if HAVE_BATCH
+    Packet* curr = p;
+    Packet* prev = p;
+    Packet* next = NULL;
+    while (curr){
+	next = curr->next();
+	curr->set_next(NULL);
+	
+	Packet* r = smaction(curr);
+	if (r){    
+	    if (head == NULL)
+		head = r;
+	    else
+		prev->set_next(r);
+	    prev = r;
+	}
+
+	curr = next;
+    }
+#else
+    head = smaction(p);
+#endif //HAVE_BATCH
+    if (head)
+      return head;
+    else
+      return NULL;
 }
 
 String

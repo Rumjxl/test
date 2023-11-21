@@ -191,7 +191,7 @@ class ARPQuerier : public Element { public:
     void cleanup(CleanupStage stage) CLICK_COLD;
     void take_state(Element *e, ErrorHandler *errh);
 
-    void push(int port, Packet *p);
+    void push(int port, Packet *p) final;
 
   private:
 
@@ -201,6 +201,7 @@ class ARPQuerier : public Element { public:
     IPAddress _my_bcast_ip;
     uint32_t _poll_timeout_j;
     int _broadcast_poll;
+    bool _sharedpkt; // operate on shared packet
 
     // statistics
     atomic_uint32_t _arp_queries;
@@ -212,7 +213,7 @@ class ARPQuerier : public Element { public:
 
     void send_query_for(const Packet *p, bool ether_dhost_valid);
 
-    void handle_ip(Packet *p, bool response);
+    Packet * handle_ip(Packet *p, bool response);
     void handle_response(Packet *p);
 
     static void expire_hook(Timer *, void *);

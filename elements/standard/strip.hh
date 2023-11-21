@@ -27,7 +27,9 @@ class Strip : public Element { public:
 
     int configure(Vector<String> &, ErrorHandler *) CLICK_COLD;
 
-    Packet *simple_action(Packet *);
+    Packet *smaction(Packet *);
+    void push(int, Packet *) final;
+    Packet *pull(int);
 
   private:
 

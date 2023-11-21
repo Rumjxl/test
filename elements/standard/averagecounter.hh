@@ -58,7 +58,9 @@ class AverageCounter : public Element { public:
     int initialize(ErrorHandler *) CLICK_COLD;
     void add_handlers() CLICK_COLD;
 
-    Packet *simple_action(Packet *);
+    Packet *smaction(Packet *);
+    void push(int, Packet *);
+    Packet *pull(int);
 
   private:
 

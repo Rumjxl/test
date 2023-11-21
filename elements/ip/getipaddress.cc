@@ -56,7 +56,7 @@ GetIPAddress::configure(Vector<String> &conf, ErrorHandler *errh)
 }
 
 Packet *
-GetIPAddress::simple_action(Packet *p)
+GetIPAddress::smaction(Packet *p)
 {
     if (_offset >= 0)
 	p->set_anno_u32(_anno, IPAddress(p->data() + _offset).addr());
@@ -64,7 +64,42 @@ GetIPAddress::simple_action(Packet *p)
 	p->set_anno_u32(_anno, p->ip_header()->ip_src.s_addr);
     else if (_offset == offset_ip_dst)
 	p->set_anno_u32(_anno, p->ip_header()->ip_dst.s_addr);
+
     return p;
+}
+
+void
+GetIPAddress::push(int, Packet *p)
+{
+    Packet* head = p;
+#if HAVE_BATCH
+    Packet* curr = p;
+    while (curr){
+	smaction(curr);	
+	curr = curr->next();
+    }
+#else
+    head = smaction(p);
+#endif //HAVE_BATCH
+    if (head)
+	output(0).push(head);
+}
+
+Packet *
+GetIPAddress::pull(int)
+{
+    //TODO Test
+    Packet* head = input(0).pull();
+#if HAVE_BATCH
+    Packet* curr = head;
+    while (curr){
+	smaction(curr);	
+	curr = curr->next();
+    }
+#else
+    head = smaction(head);
+#endif //HAVE_BATCH
+    return head;
 }
 
 CLICK_ENDDECLS

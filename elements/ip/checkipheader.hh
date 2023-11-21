@@ -117,7 +117,9 @@ class CheckIPHeader : public Element { public:
   int configure(Vector<String> &, ErrorHandler *) CLICK_COLD;
   void add_handlers() CLICK_COLD;
 
-  Packet *simple_action(Packet *);
+  inline Packet *smaction(Packet *);
+  void push(int, Packet *) final;
+  Packet *pull(int);
 
   struct OldBadSrcArg {
       static bool parse(const String &str, Vector<IPAddress> &result,

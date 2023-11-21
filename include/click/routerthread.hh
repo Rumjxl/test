@@ -4,6 +4,7 @@
 #include <click/sync.hh>
 #include <click/vector.hh>
 #include <click/timerset.hh>
+#include "elements/tcp/tcptimerset.hh"
 #if CLICK_LINUXMODULE
 # include <click/cxxprotect.h>
 CLICK_CXX_PROTECT
@@ -34,6 +35,8 @@ class RouterThread { public:
     inline Master *master() const;
     inline TimerSet &timer_set()                { return _timers; }
     inline const TimerSet &timer_set() const    { return _timers; }
+    inline TCPTimerSet &tcp_timer_set()                { return _tcp_timers; }
+    inline const TCPTimerSet &tcp_timer_set() const    { return _tcp_timers; }
 #if CLICK_USERLEVEL
     inline SelectSet &select_set()              { return _selects; }
     inline const SelectSet &select_set() const  { return _selects; }
@@ -123,6 +126,7 @@ class RouterThread { public:
 #endif
 
     TimerSet _timers;
+    TCPTimerSet _tcp_timers;
 #if CLICK_USERLEVEL
     SelectSet _selects;
 #endif

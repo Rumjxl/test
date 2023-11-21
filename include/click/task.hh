@@ -88,7 +88,8 @@ class Task : private TaskLink { public:
     /** @brief Destroy a task.
      *
      * Unschedules the task if necessary. */
-    ~Task();
+//    ~Task();
+    virtual ~Task(); // ~Task() must be virtual due to blocking tasks
 
 
     /** @brief Return the task's callback function.
@@ -156,7 +157,9 @@ class Task : private TaskLink { public:
      * scheduling parameters, such as ticket count and thread preference,
      * based on a router's ScheduleInfo.  ScheduleInfo::initialize_task()
      * calls Task::initialize(). */
-    void initialize(Element *owner, bool schedule);
+//    void initialize(Element *owner, bool schedule);
+    virtual void initialize(Element *owner, bool schedule); // virtual for blocking tasks
+
 
     /** @brief Initialize the Task, and optionally schedule it.
      * @param router specifies the router owning the Task
@@ -166,7 +169,8 @@ class Task : private TaskLink { public:
      * Task::initialize@endlink(@a router ->@link Router::root_element
      * root_element@endlink(), @a scheduled).  However, it is better to
      * explicitly associate tasks with real elements. */
-    void initialize(Router *router, bool schedule);
+//    void initialize(Router *router, bool schedule);
+    virtual void initialize(Router *router, bool schedule); // virtual for blocking tasks
 
 
     /** @brief Return true iff the task is currently scheduled to run.
@@ -281,7 +285,9 @@ class Task : private TaskLink { public:
     inline void adjust_tickets(int delta);
 #endif
 
-    inline bool fire();
+//    inline bool fire();
+    inline virtual bool fire();  // fire() must be virtual due to blocking tasks
+
 
 #if HAVE_ADAPTIVE_SCHEDULER
     inline unsigned runs() const;
@@ -300,7 +306,8 @@ class Task : private TaskLink { public:
     inline void *thunk() const CLICK_DEPRECATED;
     /** @endcond never */
 
-  private:
+//  private:
+  protected: // must use protected instead of private due to blocking tasks
 
 #if HAVE_TASK_HEAP
     int _schedpos;

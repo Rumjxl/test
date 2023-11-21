@@ -257,6 +257,11 @@ class Element { public:
     String landmark() const CLICK_DEPRECATED;
     /** @endcond never */
 
+#if CLICK_STATS >= 2
+    unsigned _static_calls;           // Calls to element's static static functions
+    click_cycles_t _static_cycles;    // Cycles spent in element's static functions.
+#endif
+
   private:
 
     enum { INLINE_PORTS = 4 };
@@ -309,8 +314,10 @@ class Element { public:
     friend class Router;
 #if CLICK_STATS >= 2
     friend class Task;
+    friend class UserTask;
     friend class Master;
     friend class TimerSet;
+    friend class TCPTimerSet;
 # if CLICK_USERLEVEL
     friend class SelectSet;
 # endif

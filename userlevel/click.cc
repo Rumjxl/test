@@ -715,6 +715,9 @@ particular purpose.\n");
                      "Click was built with Intel DPDK support but there was an\n"
                      "          error parsing the EAL arguments.\n");
         click_nthreads = rte_lcore_count();
+# if HAVE_DPDK_PACKET
+        Packet::static_initialize();
+# endif
     }
 #endif
 

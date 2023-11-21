@@ -56,6 +56,8 @@ CLICK_DECLS
  -1, usec() == +900000.
  */
 
+double Timestamp::cycles_per_ns(0.0);
+
 #if TIMESTAMP_WARPABLE
 Timestamp::warp_class_type TimestampWarp::kind = Timestamp::warp_none;
 double TimestampWarp::speed = 1.0;

@@ -24,8 +24,24 @@
 #include <click/packet_anno.hh>
 #include <click/glue.hh>
 #include <click/sync.hh>
+# include <click/tcpanno.hh>
+# include <clicknet/ether.h>
+# include <clicknet/ip.h>
+# include <clicknet/ip6.h>
+# include <clicknet/tcp.h>
+# include <clicknet/udp.h>
+# include <clicknet/tcp.hh>
 #if CLICK_USERLEVEL || CLICK_MINIOS
 # include <unistd.h>
+# if HAVE_DPDK_PACKET
+#  include <rte_config.h>
+#  include <rte_common.h>
+#  include <rte_memcpy.h>
+#  include <rte_mbuf.h>
+#  include <rte_mempool.h>
+#  include <rte_ethdev.h>
+#  include <rte_version.h>
+# endif /* HAVE_DPDK_PACKET */
 #endif
 CLICK_DECLS
 
@@ -207,7 +223,7 @@ Packet::~Packet()
 
 #if CLICK_LINUXMODULE
     panic("Packet destructor");
-#else
+#elif !HAVE_DPDK_PACKET
     if (_data_packet)
 	_data_packet->kill();
 # if CLICK_USERLEVEL || CLICK_MINIOS
@@ -223,7 +239,7 @@ Packet::~Packet()
 #endif
 }
 
-#if !CLICK_LINUXMODULE
+#if !CLICK_LINUXMODULE && !HAVE_DPDK_PACKET
 
 # if HAVE_CLICK_PACKET_POOL
 // ** Packet pools **
@@ -235,7 +251,7 @@ Packet::~Packet()
 // pool, with a global pool to even out imbalance.
 
 #  define CLICK_PACKET_POOL_BUFSIZ		2048
-#  define CLICK_PACKET_POOL_SIZE		1000 // see LIMIT in packetpool-01.clicktest
+#  define CLICK_PACKET_POOL_SIZE		1000 // see LIMIT in packetpool-01.testie
 #  define CLICK_GLOBAL_PACKET_POOL_COUNT	16
 
 namespace {
@@ -348,6 +364,7 @@ WritablePacket::pool_allocate(bool with_data)
 	--packet_pool.pcount;
     } else
 	p = new WritablePacket;
+
     return p;
 }
 
@@ -508,7 +525,7 @@ Packet::alloc_data(uint32_t headroom, uint32_t length, uint32_t tailroom)
     return true;
 }
 
-#endif /* !CLICK_LINUXMODULE */
+#endif /* !CLICK_LINUXMODULE && !HAVE_DPDK_PACKET */
 
 
 /** @brief Create and return a new packet.
@@ -529,7 +546,7 @@ Packet::alloc_data(uint32_t headroom, uint32_t length, uint32_t tailroom)
  * null. */
 WritablePacket *
 Packet::make(uint32_t headroom, const void *data,
-	     uint32_t length, uint32_t tailroom)
+	     uint32_t length, uint32_t tailroom, bool clear_annotations)
 {
 #if CLICK_LINUXMODULE
     int want = 1;
@@ -545,16 +562,48 @@ Packet::make(uint32_t headroom, const void *data,
 	skb->pkt_type = HOST;
 # endif
 	WritablePacket *q = reinterpret_cast<WritablePacket *>(skb);
-	q->clear_annotations();
+	if (clear_annotations)
+	    q->clear_annotations();
 	return q;
     } else
 	return 0;
-#else
-# if HAVE_CLICK_PACKET_POOL
+#elif HAVE_DPDK_PACKET
+//     int s = rte_socket_id();
+    int s = rte_lcore_index(rte_lcore_id());
+
+    // Check size
+    if (headroom + length + tailroom > rte_pktmbuf_data_room_size(mempool[s])) {
+	click_chatter("requested DPDK packet size %u too big (max %u)",
+	  headroom + length + tailroom, rte_pktmbuf_data_room_size(mempool[s]));
+	return NULL;
+    }
+
+    // Allocate a buffer
+    struct rte_mbuf *mbuf = rte_pktmbuf_alloc(mempool[s]);
+    if (!mbuf) {
+	click_chatter("failed to allocate DPDK mbuf");
+	return NULL;
+    }
+
+    // Check headroom and tailroom
+    assert(headroom <= rte_pktmbuf_headroom(mbuf));
+    assert(length + tailroom <= rte_pktmbuf_tailroom(mbuf));
+
+    // Copy data
+    char *d = rte_pktmbuf_append(mbuf, length);
+    if (data && length > 0)
+	rte_memcpy(d, data, length);
+
+    // Create packet with annotations cleared (done in rte_pktmbuf_alloc)
+    WritablePacket *p = Packet::make(mbuf, clear_annotations);
+
+    return p;
+# else
+#  if HAVE_CLICK_PACKET_POOL
     WritablePacket *p = WritablePacket::pool_allocate(headroom, length, tailroom);
     if (!p)
 	return 0;
-# else
+#  else
     WritablePacket *p = new WritablePacket;
     if (!p)
 	return 0;
@@ -564,7 +613,7 @@ Packet::make(uint32_t headroom, const void *data,
 	delete p;
 	return 0;
     }
-# endif
+#  endif
     if (data)
 	memcpy(p->data(), data, length);
     return p;
@@ -595,11 +644,21 @@ WritablePacket *
 Packet::make(unsigned char *data, uint32_t length,
 	     buffer_destructor_type destructor, void* argument, int headroom, int tailroom)
 {
-# if HAVE_CLICK_PACKET_POOL
-    WritablePacket *p = WritablePacket::pool_allocate(false);
+# if HAVE_DPDK_PACKET
+    (void)data;
+    (void)length;
+    (void)destructor;
+    (void)argument;
+    (void)headroom;
+    (void)tailroom;
+    assert(0);
+    return NULL;
 # else
+#  if HAVE_CLICK_PACKET_POOL
+    WritablePacket *p = WritablePacket::pool_allocate(false);
+#  else
     WritablePacket *p = new WritablePacket;
-# endif
+#  endif
     if (p) {
 	p->initialize();
 	p->_head = data - headroom;
@@ -610,6 +669,7 @@ Packet::make(unsigned char *data, uint32_t length,
         p->_destructor_argument = argument;
     }
     return p;
+# endif /* HAVE_DPDK_PACKET */
 }
 
 /** @brief Copy the content and annotations of another packet (userlevel).
@@ -621,15 +681,30 @@ Packet::copy(Packet* p, int headroom)
 {
     if (headroom + p->length() > buffer_length())
         return false;
+# if HAVE_DPDK_PACKET
+    struct rte_mbuf *m = mbuf();
+    struct rte_mbuf *n = p->mbuf();
+
+    // Limted to one segment for now
+    if (m->nb_segs != 1 || n->nb_segs != 1)
+	return false;
+
+    m->data_off = n->data_off;
+    m->data_len = n->data_len;
+    m->pkt_len  = n->pkt_len;
+    rte_memcpy(m->buf_addr, n->buf_addr, n->buf_len);
+# else
     _data = _head + headroom;
     memcpy(_data,p->data(),p->length());
     _tail = _data + p->length();
+# endif /* HAVE_DPDK_PACKET */
     copy_annotations(p);
     set_mac_header(p->mac_header() ? data() + p->mac_header_offset() : 0);
     set_network_header(p->network_header() ? data() + p->network_header_offset() : 0, p->network_header_length());
     return true;
 }
 #endif
+
 
 //
 // UNIQUEIFICATION
@@ -649,6 +724,26 @@ Packet::clone()
     struct sk_buff *nskb = skb_clone(skb(), GFP_ATOMIC);
     return reinterpret_cast<Packet *>(nskb);
 
+#elif HAVE_DPDK_PACKET
+//     struct rte_mbuf *mi = rte_pktmbuf_clone(mbuf(), mempool[rte_socket_id()]);
+    rte_prefetch0(aanno());
+    rte_prefetch0((char *)anno() + CLICK_CACHE_LINE_SIZE);
+
+    int s = rte_lcore_index(rte_lcore_id());
+    struct rte_mbuf *mi = rte_pktmbuf_clone(mbuf(), mempool[s]);
+    if (!mi) {
+	click_chatter("Failed to clone DPDK packet. Obj %d/%d (available/in use). CLONED %d", rte_mempool_avail_count(mempool[s]), rte_mempool_in_use_count(mempool[s]), mbuf()->ol_flags & IND_ATTACHED_MBUF);
+	return NULL;
+    }
+    Packet *p = reinterpret_cast<Packet *>(mi);
+
+//    rte_prefetch0(aanno());
+//    rte_prefetch0((char *)anno() + CLICK_CACHE_LINE_SIZE);
+//    rte_prefetch0(p->aanno());
+//    rte_prefetch0((char *)p->anno() + CLICK_CACHE_LINE_SIZE);
+
+    rte_memcpy(p->aanno(), aanno(), sizeof(AllAnno));
+    return p;
 #elif CLICK_USERLEVEL || CLICK_BSDMODULE || CLICK_MINIOS
 # if CLICK_BSDMODULE
     struct mbuf *m;
@@ -723,6 +818,158 @@ Packet::expensive_uniqueify(int32_t extra_headroom, int32_t extra_tailroom,
 
     return reinterpret_cast<WritablePacket *>(nskb);
 
+#elif HAVE_DPDK_PACKET
+    // We can never add space to the buffer since its size is fixed
+//    if (extra_headroom + extra_tailroom != 0) {
+    if (extra_headroom || extra_tailroom) { // both must be zero for now
+	click_chatter("failed to uniqueify DPDK packet");
+	return NULL;
+    }
+
+    // If any segment was cloned, then make a clone and uniqueify that
+    for (struct rte_mbuf *m = mbuf(); m; m = m->next) {
+	if (RTE_MBUF_DIRECT(m) && rte_mbuf_refcnt_read(m) > 1) {
+	    Packet *p = clone();
+	    WritablePacket *q = (p ? p->expensive_uniqueify(extra_headroom, extra_tailroom, true) : 0);
+	    if (q || free_on_failure)
+		kill();
+	    return q;
+	}
+    }
+
+    static int chatter = 0;
+    if (chatter < 5) {
+	click_chatter("expensive uniqueify");
+	chatter++;
+    }
+
+    const unsigned char *old_head = buffer();
+
+    // Absolute offset value
+//    uint32_t absoff = RTE_MAX(extra_headroom, extra_tailroom);
+
+    // Uniqueify mbuf chain
+    for (struct rte_mbuf *m = mbuf(); m; m = m->next) {
+	// At this point, each mbuf is either indirect or direct with refcnt = 1
+	if (RTE_MBUF_DIRECT(m)) {
+	    assert(rte_mbuf_refcnt_read(m) == 1);
+	    continue;
+	}
+
+	// Save data length and offset
+	uint16_t data_len = m->data_len;
+	uint16_t data_off = m->data_off;
+
+	// Get direct mbuf
+	struct rte_mbuf *md = rte_mbuf_from_indirect(m);
+	struct rte_mempool *mp = md->pool;
+
+	// Get buffer address 
+	uint32_t mbuf_size = sizeof(struct rte_mbuf) + rte_pktmbuf_priv_size(mp);
+	void *buf_addr = (char *)m + mbuf_size;
+
+	// Copy data
+	assert(m->buf_len == md->buf_len);
+	rte_memcpy(buf_addr, md->buf_addr, m->buf_len);
+
+	// Detach indirect mbuf
+	rte_pktmbuf_detach(m);
+
+	// Set data length and offset
+	m->data_len = data_len;
+	m->data_off = data_off;
+
+# if RTE_VERSION < RTE_VERSION_NUM(16,7,0,0)
+	// Reduce refcnt and free direct mbuf, if needed
+	if (rte_mbuf_refcnt_update(md, -1) == 0)
+	    rte_mempool_put(md->pool, md);
+# endif
+
+	// Adjust first segment
+//	if (mi == mbuf()) {
+//	    mi->data_off += extra_headroom;
+//	    mi->data_len -= extra_headroom;
+//	}
+
+	// Copy data
+//	char *src = rte_mbuf_to_baddr(md) + RTE_MAX(extra_tailroom, 0);
+//	char *dst = rte_mbuf_to_baddr(mi) + RTE_MAX(extra_headroom, 0);
+//	uint32_t len = md->buf_len - absoff;
+//	memmove(dst, src, len);
+
+	// Get next segment
+//	struct rte_mbuf *ni = mi->next;
+
+	// Copy remaining data
+//	if (ni && extra_headroom) {
+//	    assert(RTE_MBUF_INDIRECT(ni));
+//	    struct rte_mbuf *nd = rte_mbuf_from_indirect(ni);
+//	    src = (extra_headroom > 0 ? src+len : rte_pktmbuf_mtod(nd, char *));
+//	    dst = (extra_headroom > 0 ? rte_pktmbuf_mtod(ni, char *) : dst+len);
+//	    len = absoff;
+//	    memmove(dst, src, len);
+//	}
+
+	// Adjust last segment	
+//	if (!ni)
+//	    mi->data_len += extra_headroom;
+
+	// Reduce refcnt and free direct mbuf, if needed
+//	if (rte_mbuf_refcnt_update(md, -1) == 0)
+//	    rte_mempool_put(md->pool, md);
+
+	// Process next segment
+//	mi = ni;
+    }
+
+    shift_header_annotations(old_head, extra_headroom); 
+    return static_cast<WritablePacket *>(this);
+
+/*
+    // If someone else has cloned this packet, then we need to leave its data
+    // pointers around. Make a clone and uniqueify that.
+    if (rte_mbuf_refcnt_read(mbuf()) > 1) {
+	Packet *p = clone();
+	WritablePacket *q = (p ? p->expensive_uniqueify(extra_headroom, extra_tailroom, true) : 0);
+	if (q || free_on_failure)
+	    kill();
+	return q;
+    }
+
+    assert(RTE_MBUF_INDIRECT(mbuf()));
+    static int chatter = 0;
+    if (chatter < 5) {
+	click_chatter("expensive uniqueify");
+	chatter++;
+    }
+
+    const unsigned char *old_head = buffer();
+
+    // mbuf pointers
+    struct rte_mbuf *mi = mbuf();
+    struct rte_mbuf *md = rte_mbuf_from_indirect(mi);
+
+    // detach indirect mbuf
+    rte_pktmbuf_detach(mi);
+
+    // set packet length
+    rte_pktmbuf_pkt_len(mi)  = rte_pktmbuf_pkt_len(md);
+    rte_pktmbuf_data_len(mi) = rte_pktmbuf_data_len(md);
+
+    // set data offset (headroom)
+    mi->data_off = md->data_off + extra_headroom;
+
+    void *src = rte_mbuf_to_baddr(md) + RTE_MAX(extra_tailroom, 0);
+    void *dst = rte_mbuf_to_baddr(mi) + RTE_MAX(extra_headroom, 0);
+    uint32_t len = md->buf_len - RTE_MAX(extra_headroom, extra_tailroom);
+    rte_memcpy(dst, src, len);
+
+    // free old data
+    if (rte_mbuf_refcnt_update(md, -1) == 0)
+	rte_mempool_put(md->pool, md);
+
+    shift_header_annotations(old_head, extra_headroom); 
+    return static_cast<WritablePacket *>(this);*/
 #else /* !CLICK_LINUXMODULE */
 
     // If someone else has cloned this packet, then we need to leave its data
@@ -748,20 +995,21 @@ Packet::expensive_uniqueify(int32_t extra_headroom, int32_t extra_tailroom,
 
     unsigned char *start_copy = old_head + (extra_headroom >= 0 ? 0 : -extra_headroom);
     unsigned char *end_copy = old_end + (extra_tailroom >= 0 ? 0 : extra_tailroom);
+
     memcpy(_head + (extra_headroom >= 0 ? extra_headroom : 0), start_copy, end_copy - start_copy);
 
     // free old data
     if (_data_packet)
 	_data_packet->kill();
-# if CLICK_USERLEVEL || CLICK_MINIOS
+#  if CLICK_USERLEVEL || CLICK_MINIOS
     else if (_destructor)
 	_destructor(old_head, old_end - old_head, _destructor_argument);
     else
 	delete[] old_head;
     _destructor = 0;
-# elif CLICK_BSDMODULE
+#  elif CLICK_BSDMODULE
     m_freem(old_m); // alloc_data() created a new mbuf, so free the old one
-# endif
+#  endif
 
     _use_count = 1;
     _data_packet = 0;
@@ -845,9 +1093,16 @@ Packet::expensive_push(uint32_t nbytes)
                   headroom(), nbytes);
     chatter++;
   }
+#if HAVE_DPDK_PACKET
+  assert(nbytes <= headroom());
+  if (WritablePacket *q = expensive_uniqueify(0, 0, true)) {
+#else
   if (WritablePacket *q = expensive_uniqueify((nbytes + 128) & ~3, 0, true)) {
+#endif
 #ifdef CLICK_LINUXMODULE	/* Linux kernel module */
     __skb_push(q->skb(), nbytes);
+#elif HAVE_DPDK_PACKET
+    rte_pktmbuf_prepend(q->mbuf(), nbytes);
 #else				/* User-space and BSD kernel module */
     q->_data -= nbytes;
 # ifdef CLICK_BSDMODULE
@@ -870,9 +1125,16 @@ Packet::expensive_put(uint32_t nbytes)
                   tailroom(), nbytes);
     chatter++;
   }
+#if HAVE_DPDK_PACKET
+  assert(nbytes <= tailroom());
+  if (WritablePacket *q = expensive_uniqueify(0, 0, true)) {
+#else
   if (WritablePacket *q = expensive_uniqueify(0, nbytes + 128, true)) {
+#endif
 #ifdef CLICK_LINUXMODULE	/* Linux kernel module */
     __skb_put(q->skb(), nbytes);
+#elif HAVE_DPDK_PACKET
+    rte_pktmbuf_append(q->mbuf(), nbytes);
 #else				/* User-space and BSD kernel module */
     q->_tail += nbytes;
 # ifdef CLICK_BSDMODULE
@@ -903,22 +1165,156 @@ Packet::shift_data(int offset, bool free_on_failure)
 	&& transport_header() <= end_buffer() && transport_header() < dp)
 	dp = network_header();
 
+#if HAVE_DPDK_PACKET
+# define min(a, b) ((a) < (b) ? (a) : (b))
+    // Make sure no mbufs need to be allocated
+    assert(offset < 0 ? (dp - buffer()) >= (ptrdiff_t)(-offset)
+        : (tailroom() >= (uint32_t)offset));
+
+    // Make sure the first and the last mbufs are non-empty
+    assert(offset < 0 ? seg_last()->mbuf()->data_len > (-offset)
+        : mbuf()->data_len > (uint32_t)offset);
+
+    if (!shared()) {
+	// The idea here is to shift data across all segments without changing
+	// the length of each intermediate segment, i.e., only the lengths of
+	// the first (-offset) and the last (+offset) segments will change
+	if (offset > 0) {
+	    // Create a vector with all mbufs for easy access
+	    Vector<struct rte_mbuf *> mbufs;
+	    for (struct rte_mbuf *m = mbuf(); m; m = m->next)
+		mbufs.push_back(m);
+
+	    // Source and destination mbuf indexes
+	    int sidx = mbufs.size() - 1;
+	    int didx = mbufs.size() - 1;
+
+	    // Source and destination mbufs
+	    struct rte_mbuf *sm = mbufs[sidx];
+	    struct rte_mbuf *dm = mbufs[didx];
+
+	    // Source and destination offsets
+	    int soff = sm->data_len;
+	    int doff = soff + offset;
+
+	    // Header length
+	    int hlen = int(data() - dp);
+
+	    // Data and headers length
+	    int len = length() + hlen;
+
+	    while (len > 0) {
+		// Byte count
+		int cnt = min(soff, doff);
+
+		// Make sure we also copy the headers
+		if (sidx == 0 && soff == cnt)
+		    cnt += hlen;
+
+		// Offset update
+		soff -= cnt;
+		doff -= cnt;
+
+		// Data pointers
+		uint8_t *src = rte_pktmbuf_mtod(sm, uint8_t *) + soff;
+		uint8_t *dst = rte_pktmbuf_mtod(dm, uint8_t *) + doff;
+
+		// Data copy
+		memmove(dst, src, cnt);
+
+		// Get previous segment
+		if (soff == 0 && sidx > 0) {
+		    sm = mbufs[--sidx];
+		    soff = sm->data_len;
+		}
+		if (doff == 0 && didx > 0) {
+		    dm = mbufs[--didx];
+		    doff = dm->data_len;
+		}
+
+		// Reduce remaining length
+		len -= cnt;
+	    }
+
+	    // Adjust data offset
+	    rte_pktmbuf_adj(mbuf(), offset);
+	    rte_pktmbuf_append(mbuf(), offset);
+	}
+	else {
+	    // Source and destination mbufs
+	    struct rte_mbuf *sm = mbuf();
+	    struct rte_mbuf *dm = mbuf();
+
+	    // Source and destination offsets
+	    int soff = -int(data() - dp);
+	    int doff = soff + offset;
+
+	    // Header length
+	    int hlen = int(data() - dp);
+
+	    // Data and headers length 
+	    int len = length() + hlen;
+
+	    while (len > 0) {
+		// Data pointers
+		uint8_t *src = rte_pktmbuf_mtod(sm, uint8_t *) + soff;
+		uint8_t *dst = rte_pktmbuf_mtod(dm, uint8_t *) + doff;
+
+		// Byte count
+		int cnt = min(sm->data_len - soff, dm->data_len - doff);
+
+		// Data copy
+		memmove(dst, src, cnt);
+
+		// Offset update
+		soff += cnt;
+		doff += cnt;
+
+		// Get next segment
+		if (soff == sm->data_len) {
+		    sm = sm->next;
+		    soff = 0;
+		}
+		if (doff == dm->data_len) {
+		    dm = dm->next;
+		    doff = 0;
+		}
+
+		// Reduce remaining length
+		len -= cnt;
+	    }
+
+	    // Adjust data offset
+	    rte_pktmbuf_prepend(mbuf(), -offset);
+	    rte_pktmbuf_trim(mbuf(), -offset);
+	}
+
+	shift_header_annotations(buffer(), offset);
+	return this;
+    }
+    else {
+	// Expensive uniqueify only supports zero offset for now
+	WritablePacket *p = expensive_uniqueify(0, 0, free_on_failure);
+	return (p ? p->shift_data(offset, free_on_failure) : NULL);
+    }
+# undef min
+#else 
     if (!shared()
 	&& (offset < 0 ? (dp - buffer()) >= (ptrdiff_t)(-offset)
 	    : tailroom() >= (uint32_t)offset)) {
 	WritablePacket *q = static_cast<WritablePacket *>(this);
 	memmove((unsigned char *) dp + offset, dp, q->end_data() - dp);
-#if CLICK_LINUXMODULE
+# if CLICK_LINUXMODULE
 	struct sk_buff *mskb = q->skb();
 	mskb->data += offset;
 	mskb->tail += offset;
-#else				/* User-space and BSD kernel module */
+# else				/* User-space and BSD kernel module */
 	q->_data += offset;
 	q->_tail += offset;
-# if CLICK_BSDMODULE
+#  if CLICK_BSDMODULE
 	q->m()->m_data += offset;
+#  endif
 # endif
-#endif
 	shift_header_annotations(q->buffer(), offset);
 	return this;
     } else {
@@ -929,6 +1325,7 @@ Packet::shift_data(int offset, bool free_on_failure)
 	    offset += ((uintptr_t)buffer() & 7);
 	return expensive_uniqueify(offset, tailroom_offset, free_on_failure);
     }
+#endif /* HAVE_DPDK_PACKET */
 }
 
 
@@ -952,6 +1349,202 @@ cleanup_pool(PacketPool *pp, int global)
     assert(global || (pcount == pp->pcount && pdcount == pp->pdcount));
 }
 #endif
+
+#if HAVE_DPDK
+Packet::mempoolTable* Packet::mempool;
+
+
+void 
+Packet::destroy(unsigned char *, size_t, void *buf){
+	rte_pktmbuf_free(static_cast<struct rte_mbuf *>(buf));
+}
+
+WritablePacket *
+Packet::mbuf2packet(struct rte_mbuf *m)
+{
+# if HAVE_DPDK_PACKET
+	WritablePacket *p = make(m);
+# else
+	// Get packet data and length
+	uint8_t *d = (uint8_t *)rte_mbuf_to_baddr(m);
+	uint16_t len = rte_pktmbuf_headroom(m) + \
+	               rte_pktmbuf_data_len(m) + \
+	               rte_pktmbuf_tailroom(m);
+
+	// Create the packet with zero-copy and own destructor
+	WritablePacket *p = make(d, len, destroy, m);
+
+	// Adjust pointers for headroom and tailroom
+	p->pull(rte_pktmbuf_headroom(m));
+	p->take(rte_pktmbuf_tailroom(m));
+# endif
+
+	return p;
+}
+
+struct rte_mbuf * 
+Packet::packet2mbuf(bool tx_ip_checksum, bool tx_tcp_checksum, bool tx_udp_checksum, bool tx_tcp_tso)
+{
+	struct rte_mbuf *m;
+# if HAVE_DPDK_PACKET
+	m = mbuf();
+# else
+// 	// Zero-copy operation if an unshared DPDK packet
+// 	if (is_dpdk_packet(this) && !shared()) {
+// 		m = (struct rte_mbuf *)destructor_argument();
+// 		m->data_off = headroom();
+// 		set_buffer_destructor(fake_destroy);
+// 	}
+// 	else {
+	int s = rte_lcore_index(rte_lcore_id());
+	m = rte_pktmbuf_alloc(mempool[s]);
+	if (!m)
+		return NULL;
+	m->data_off = headroom();
+	rte_memcpy(rte_pktmbuf_mtod(m, char *), data(), length());
+
+	// Increase mbuf to match the packet length
+	rte_pktmbuf_append(m, length());
+# endif
+
+	// Checksum and TCP segmentation offloading
+	if (tx_ip_checksum  || tx_tcp_checksum || tx_udp_checksum) {
+		// Ethernet header
+		m->l2_len = sizeof(click_ether);
+		click_ether *eh = rte_pktmbuf_mtod(m, click_ether *);
+		uint16_t ether_type = ntohs(eh->ether_type);
+
+		// VLAN header
+		if (ether_type == ETHERTYPE_8021Q) {
+			m->l2_len = sizeof(click_ether_vlan);
+			click_ether_vlan *vh = (click_ether_vlan *)(eh + 1);
+			ether_type = ntohs(vh->ether_vlan_encap_proto);
+		}
+
+		// IP checksum
+		uint8_t proto = 0;
+		if (ether_type == ETHERTYPE_IP) {
+			click_ip *ip = (click_ip *)((char *)eh + m->l2_len);
+			m->l3_len = ip->ip_hl << 2;
+			m->ol_flags |= PKT_TX_IPV4;
+			proto = ip->ip_p;
+			if (tx_ip_checksum) {
+				ip->ip_sum = 0;
+				m->ol_flags |= PKT_TX_IP_CKSUM;
+			}
+		}
+		else if (ether_type == ETHERTYPE_IP6) {
+			click_ip6 *ip = (click_ip6 *)((char *)eh + m->l2_len);
+			m->l3_len = sizeof(click_ip6);
+			m->ol_flags |= PKT_TX_IPV6;
+			proto = ip->ip6_nxt;
+		}
+
+		// TCP/UDP checksum
+		char *l3_hdr = (char *)eh + m->l2_len;
+		if (proto == IP_PROTO_UDP && tx_udp_checksum) {
+			m->ol_flags |= PKT_TX_UDP_CKSUM;
+			click_udp *uh = (click_udp *)(l3_hdr + m->l3_len);
+			if (ether_type == ETHERTYPE_IP) {
+				struct ipv4_hdr *ip = (struct ipv4_hdr *)l3_hdr;
+				uh->uh_sum = rte_ipv4_phdr_cksum(ip, m->ol_flags);
+			}
+			else if (ether_type == ETHERTYPE_IP6) {
+				struct ipv6_hdr *ip = (struct ipv6_hdr *)l3_hdr;
+				uh->uh_sum = rte_ipv6_phdr_cksum(ip, m->ol_flags);
+			}
+		}
+		else if (proto == IPPROTO_TCP && tx_tcp_checksum) {
+			m->ol_flags |= PKT_TX_TCP_CKSUM;
+			click_tcp *th = (click_tcp *)(l3_hdr + m->l3_len);
+			m->l4_len = (th->th_off << 2);
+			
+			uint32_t data = m->pkt_len - m->l4_len - m->l3_len -m->l2_len;
+			
+			// TCP segmentation offloading (must be before cksum)
+			// Silently disable TSO in case of SYN, RST and zero sized packet  
+			if (tx_tcp_tso && TCP_MSS_ANNO(this) && !(TCP_SYN(th) || TCP_RST(th) || TCP_FIN(th) || data < 1)) {
+
+				m->ol_flags |= PKT_TX_TCP_SEG;
+				m->tso_segsz = TCP_MSS_ANNO(this);
+			}
+
+			if (ether_type == ETHERTYPE_IP) {
+				struct ipv4_hdr *ip = (struct ipv4_hdr *)l3_hdr;
+				th->th_sum = rte_ipv4_phdr_cksum(ip, m->ol_flags);
+			}
+			else if (ether_type == ETHERTYPE_IP6) {
+				struct ipv6_hdr *ip = (struct ipv6_hdr *)l3_hdr;
+				th->th_sum = rte_ipv6_phdr_cksum(ip, m->ol_flags);
+			}
+		}
+	}
+
+	return m;
+}
+
+
+void
+Packet::static_initialize()
+{
+    unsigned lcore_id;
+  
+    // size reserved for the data
+    uint16_t data_room_size = RTE_PKTMBUF_HEADROOM + RTE_MBUF_DEFAULT_DATAROOM + 9162;
+    
+    
+    // Resize mempool
+    mempool = new mempoolTable[rte_lcore_count()];
+# if HAVE_DPDK_PACKET
+
+    // Reserve space for click annotations
+    uint16_t priv_data_size = RTE_ALIGN(sizeof(AllAnno), CLICK_CACHE_LINE_SIZE);
+    uint32_t size = sizeof(struct rte_mbuf) + priv_data_size + data_room_size;
+
+    // Private data
+    struct rte_pktmbuf_pool_private priv;
+    priv.mbuf_data_room_size = data_room_size;
+    priv.mbuf_priv_size = priv_data_size;
+
+    // Allocate a per-core mempool
+    RTE_LCORE_FOREACH(lcore_id) {
+	int t = rte_lcore_index(lcore_id);
+	mempool[t] = rte_mempool_create(
+	                (String("POOL_") + t).c_str(),           // name
+	                64 * 1024 - 1,                          // pool size
+	                size,                                    // element size
+	                RTE_MEMPOOL_CACHE_MAX_SIZE,              // cache size
+	                sizeof(struct rte_pktmbuf_pool_private), // priv size
+	                rte_pktmbuf_pool_init,                   // mp_init
+	                &priv,                                   // mp_init_arg
+	                rte_pktmbuf_init,                        // obj_init
+	                NULL,                                    // obj_init_arg
+	                rte_lcore_to_socket_id(lcore_id),        // socket_id
+	                MEMPOOL_F_NO_SPREAD);                    // flags
+
+
+	if (!mempool[t])
+	    rte_exit(EXIT_FAILURE, "failed to create mempool\n");
+    }
+
+    
+# else
+    // Allocate a per-core mempool
+    RTE_LCORE_FOREACH(lcore_id) {
+	int t = rte_lcore_index(lcore_id);
+	mempool[t] = rte_pktmbuf_pool_create(
+				    (String("POOL_") + t).c_str(),      // name
+				    64 * 1024 - 1,                     // pool size
+		                    RTE_MEMPOOL_CACHE_MAX_SIZE,         // cache size
+		                    0,                                  // priv size
+		                    data_room_size,                     // data size
+		                    rte_lcore_to_socket_id(lcore_id));  // socket id
+	if (!mempool[t])
+	    rte_exit(EXIT_FAILURE, "failed to create mempool\n");
+    }
+# endif  /* HAVE_DPDK_PACKET */
+}
+#endif /* HAVE_DPDK */
 
 void
 Packet::static_cleanup()

@@ -25,7 +25,7 @@
 CLICK_DECLS
 
 SetTCPChecksum::SetTCPChecksum()
-  : _fixoff(false)
+  : _fixoff(false), _sharedpkt(false)
 {
 }
 
@@ -38,13 +38,20 @@ SetTCPChecksum::configure(Vector<String> &conf, ErrorHandler *errh)
 {
     return Args(conf, this, errh)
 	.read_p("FIXOFF", _fixoff)
+    .read("SHAREDPKT", _sharedpkt) 
 	.complete();
 }
 
 Packet *
-SetTCPChecksum::simple_action(Packet *p_in)
+SetTCPChecksum::smaction(Packet *p_in)
 {
-  WritablePacket *p = p_in->uniqueify();
+  WritablePacket *p;
+  
+  if (_sharedpkt)
+    p = (WritablePacket *) p_in;
+  else
+    p = p_in->uniqueify();
+    
   click_ip *iph = p->ip_header();
   click_tcp *tcph = p->tcp_header();
   unsigned plen = ntohs(iph->ip_len) - (iph->ip_hl << 2);
@@ -72,6 +79,70 @@ SetTCPChecksum::simple_action(Packet *p_in)
   click_chatter("SetTCPChecksum: bad lengths");
   p->kill();
   return(0);
+}
+
+void
+SetTCPChecksum::push(int, Packet *p)
+{
+    Packet* head = NULL;
+#if HAVE_BATCH
+    Packet* curr = p;
+    Packet* prev = p;
+    Packet* next = NULL;
+    while (curr){
+	next = curr->next();
+	curr->set_next(NULL);
+	
+	Packet* r = smaction(curr);
+	if (r){    
+	    if (head == NULL)
+		head = r;
+	    else
+		prev->set_next(r);
+	    prev = r;
+	}
+
+	curr = next;
+    }
+#else
+    head = smaction(p);
+#endif //HAVE_BATCH
+    if (head)
+	output(0).push(head);
+}
+
+Packet *
+SetTCPChecksum::pull(int)
+{
+    //TODO Test
+    Packet* p = input(0).pull();
+    Packet* head = NULL;
+#if HAVE_BATCH
+    Packet* curr = p;
+    Packet* prev = p;
+    Packet* next = NULL;
+    while (curr){
+	next = curr->next();
+	curr->set_next(NULL);
+	
+	Packet* r = smaction(curr);
+	if (r){    
+	    if (head == NULL)
+		head = r;
+	    else
+		prev->set_next(r);
+	    prev = r;
+	}
+
+	curr = next;
+    }
+#else
+    head = smaction(p);
+#endif //HAVE_BATCH
+    if (head)
+      return head;
+    else
+      return NULL;
 }
 
 CLICK_ENDDECLS
